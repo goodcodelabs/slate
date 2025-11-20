@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"slate/internal/command"
 	"slate/internal/data"
 	"slate/internal/parser"
 	"slate/internal/scheduler"
@@ -82,6 +83,8 @@ func (h *Handler) HandleConnection(ctx context.Context) {
 			continue
 		}
 
+		setCommand := command.InitCommand(command.InitSetCommand(h.store))
+
 		h.sched.Schedule(&scheduler.Activity{
 			Job: func() {
 				switch req.Command {
@@ -95,7 +98,7 @@ func (h *Handler) HandleConnection(ctx context.Context) {
 						_ = h.Respond("error|Invalid Parameters")
 						return
 					}
-					err = h.store.Set(req.Params[0], req.Params[1])
+					err = setCommand.Cmd.Execute(req.Params)
 					h.logger.Info("Set Command", "key", req.Params[0], "value", req.Params[1])
 					_ = h.Respond("ok")
 				case "get":
