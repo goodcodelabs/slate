@@ -12,14 +12,12 @@ type Configuration struct {
 	ClientIdleTimeout int
 }
 
-func NewConfiguration() *Configuration {
-	c := &Configuration{}
-
-	c.Port = config.GetIntegerOrDefault("PORT", 4242)
-	c.Host = config.GetEnvOrDefault("HOST", "localhost")
-	c.MaxConnections = config.GetIntegerOrDefault("MAX_CONNECTIONS", 10)
-	c.Timeout = config.GetIntegerOrDefault("TIMEOUT", 500)
-	c.ClientIdleTimeout = config.GetIntegerOrDefault("CLIENT_IDLE_TIMEOUT_MS", 60000)
-
-	return c
+func New() *Configuration {
+	return &Configuration{
+		Port:              config.GetIntegerOrDefault("PORT", 4242),
+		Host:              config.GetEnvOrDefault("HOST", "localhost"),
+		MaxConnections:    config.GetIntegerOrDefault("MAX_CONNECTIONS", 10),
+		Timeout:           config.GetIntegerOrDefault("TIMEOUT", 500),
+		ClientIdleTimeout: config.GetIntegerOrDefault("CLIENT_IDLE_TIMEOUT_MS", 60000),
+	}
 }

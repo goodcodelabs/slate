@@ -1,19 +1,18 @@
 package command
 
-import "slate/internal/data"
+import (
+	"slate/internal/data"
+	"strings"
+)
 
-type Set Command
-
-func InitSetCommand(store *data.Data) *Set {
-	return &Set{
-		store: store,
-	}
+type SetCommand struct {
+	store *data.Database
 }
 
-func (s *Set) Execute(args []string) error {
-	err := s.store.Set(args[0], args[1])
+func (c *SetCommand) Execute(connectionContext ConnectionContext, params []string) (*Response, error) {
+	err := c.store.Set(params[0], strings.Join(params[1:], " "))
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return nil
+	return &Response{ResponseMessage: "ok"}, nil
 }

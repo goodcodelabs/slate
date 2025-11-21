@@ -18,7 +18,7 @@ type Handler struct {
 
 	logger        *slog.Logger
 	requestParser *parser.Parser
-	store         *data.Data
+	store         *data.Database
 	sched         *scheduler.Scheduler
 
 	opts *Options

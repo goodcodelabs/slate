@@ -20,17 +20,11 @@ func (p *Parser) ParseRequest(request string) (*ParsedRequest, error) {
 	if len(parts) == 0 {
 		return nil, ErrUnknownCommand
 	}
-	
-	for _, cmd := range COMMANDS {
-		if cmd == parts[0] {
-			return &ParsedRequest{
-				Command: parts[0],
-				Params:  parts[1:],
-			}, nil
-		}
-	}
 
-	return nil, ErrUnknownCommand
+	return &ParsedRequest{
+		Command: strings.ToLower(parts[0]),
+		Params:  parts[1:],
+	}, nil
 
 }
 

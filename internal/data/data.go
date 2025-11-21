@@ -2,41 +2,42 @@ package data
 
 import "errors"
 
-func New() *Data {
-	return &Data{
-		store: make(map[string]string),
+func New(name string) *Database {
+	return &Database{
+		name:    name,
+		kvStore: make(map[string]string),
 	}
 }
 
-func (d *Data) Set(key string, val string) error {
+func (d *Database) Set(key string, val string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	d.store[key] = val
+	d.kvStore[key] = val
 
 	return nil
 }
 
-func (d *Data) Get(key string) (string, error) {
+func (d *Database) Get(key string) (string, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	if val, ok := d.store[key]; ok {
+	if val, ok := d.kvStore[key]; ok {
 		return val, nil
 	}
 
-	return "", errors.New("key not found")
+	return "", errors.New("key_not_found")
 }
 
-func (d *Data) Del(key string) error {
+func (d *Database) Del(key string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	if _, ok := d.store[key]; !ok {
-		return errors.New("key not found")
+	if _, ok := d.kvStore[key]; !ok {
+		return errors.New("key_not_found")
 	}
 
-	delete(d.store, key)
+	delete(d.kvStore, key)
 
 	return nil
 }

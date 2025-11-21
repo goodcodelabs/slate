@@ -9,10 +9,12 @@ import (
 	"os/signal"
 	"slate/cmd/server/configuration"
 	"slate/internal/connection"
+	"slate/internal/data"
+	"slate/internal/scheduler"
 )
 
 func main() {
-	c := configuration.NewConfiguration()
+	c := configuration.New()
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
 	run(c, logger)
@@ -30,7 +32,14 @@ func run(cfg *configuration.Configuration, logger *slog.Logger) {
 	}
 	defer closeListener(logger, listener)
 
+	sched := scheduler.NewScheduler()
+	sched.Start()
+	defer sched.Stop()
+
+	store := data.New("default")
+
 	sem := make(chan struct{}, cfg.MaxConnections)
+
 	for {
 		c, err := listener.Accept()
 		if err != nil {
@@ -43,7 +52,7 @@ func run(cfg *configuration.Configuration, logger *slog.Logger) {
 		select {
 		case sem <- struct{}{}:
 			go func(c net.Conn) {
-				conn := connection.New(c, &connection.Options{
+				conn := connection.New(c, sched, store, &connection.Options{
 					ClientIdleTimeout: cfg.ClientIdleTimeout,
 				})
 

@@ -2,8 +2,13 @@ package data
 
 import "sync"
 
-type Data struct {
+type Database struct {
 	mu sync.Mutex
 
-	store map[string]string
+	name    string
+	kvStore map[string]string
+}
+
+type Core struct {
+	Databases []*Database
 }
