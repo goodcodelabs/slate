@@ -25,8 +25,10 @@ func New(connection net.Conn, sched *scheduler.Scheduler, store *data.Database, 
 	return &Handler{
 		Connection: connection,
 
-		ID:        connId,
-		IPAddress: getIPAddress(connection),
+		context: Context{
+			IPAddress: getIPAddress(connection),
+			SessionID: connId,
+		},
 
 		store: store,
 
@@ -40,7 +42,7 @@ func New(connection net.Conn, sched *scheduler.Scheduler, store *data.Database, 
 func (h *Handler) HandleConnection(ctx context.Context) {
 	defer h.CloseConnection()
 
-	h.logger.Info("Connection Started", "ip", h.IPAddress, "conn_id", h.ID)
+	h.logger.Info("Connection Started", "ip", h.context.IPAddress, "conn_id", h.context.SessionID)
 
 	buffer := make([]byte, 16384)
 
@@ -87,11 +89,6 @@ func (h *Handler) HandleConnection(ctx context.Context) {
 			return
 		}
 
-		connectionContext := command.ConnectionContext{
-			IPAddress: h.IPAddress,
-			SessionID: h.ID,
-		}
-
 		commands := command.InitCommands(h.store)
 
 		h.sched.Schedule(&scheduler.Activity{
@@ -106,7 +103,10 @@ func (h *Handler) HandleConnection(ctx context.Context) {
 				}
 
 				cmd := commands[req.Command]
-				resp, err := cmd.Execute(connectionContext, req.Params)
+				resp, err := cmd.Execute(command.Context{
+					IPAddress: h.context.IPAddress,
+					SessionID: h.context.SessionID,
+				}, req.Params)
 				if err != nil {
 					h.logger.Error("Executing Command", "error", err)
 					_ = h.Respond(fmt.Sprintf("error|%s", err.Error()))
@@ -114,7 +114,7 @@ func (h *Handler) HandleConnection(ctx context.Context) {
 				}
 
 				if resp != nil {
-					_ = h.Respond(resp.ResponseMessage)
+					_ = h.Respond(resp.Message)
 				}
 			},
 		})

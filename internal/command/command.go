@@ -7,26 +7,25 @@ import (
 )
 
 type Command interface {
-	Execute(connectionContext ConnectionContext, params []string) (*Response, error)
+	Execute(commandContext Context, params []string) (*Response, error)
 }
 type ProtocolCommand struct {
 	cmd Command
 }
 
 type Response struct {
-	ResponseMessage string
-	Error           error
+	Message string
 }
 
-type ConnectionContext struct {
+type Context struct {
 	IPAddress string
 	SessionID ksuid.KSUID
 }
 
-func (p *ProtocolCommand) Execute(connectionContext ConnectionContext, params []string) (*Response, error) {
-	val, err := p.cmd.Execute(connectionContext, params)
+func (p *ProtocolCommand) Execute(commandContext Context, params []string) (*Response, error) {
+	val, err := p.cmd.Execute(commandContext, params)
 	if err != nil {
-		return &Response{ResponseMessage: "", Error: err}, err
+		return nil, err
 	}
 	return val, nil
 }

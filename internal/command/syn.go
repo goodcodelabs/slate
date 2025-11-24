@@ -5,6 +5,6 @@ import "fmt"
 type SynCommand struct {
 }
 
-func (c *SynCommand) Execute(connectionContext ConnectionContext, params []string) (*Response, error) {
-	return &Response{ResponseMessage: fmt.Sprintf("ack")}, nil
+func (c *SynCommand) Execute(connectionContext Context, params []string) (*Response, error) {
+	return &Response{Message: fmt.Sprintf("ack")}, nil
 }

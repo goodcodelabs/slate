@@ -12,3 +12,15 @@ type Database struct {
 type Core struct {
 	Databases []*Database
 }
+
+type Metadata struct {
+	Name string
+}
+
+type SystemConfiguration struct {
+}
+
+type System struct {
+	Databases     []*Metadata
+	Configuration SystemConfiguration
+}

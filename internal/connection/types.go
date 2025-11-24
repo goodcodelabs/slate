@@ -11,9 +11,8 @@ import (
 )
 
 type Handler struct {
-	ID        ksuid.KSUID
-	IPAddress string
-
+	context Context
+	
 	Connection net.Conn
 
 	logger        *slog.Logger
@@ -26,4 +25,9 @@ type Handler struct {
 
 type Options struct {
 	ClientIdleTimeout int
+}
+
+type Context struct {
+	IPAddress string
+	SessionID ksuid.KSUID
 }
