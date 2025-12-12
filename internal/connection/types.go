@@ -12,12 +12,12 @@ import (
 
 type Handler struct {
 	context Context
-	
+
 	Connection net.Conn
 
 	logger        *slog.Logger
 	requestParser *parser.Parser
-	store         *data.Database
+	store         *data.Data
 	sched         *scheduler.Scheduler
 
 	opts *Options

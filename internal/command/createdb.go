@@ -5,7 +5,7 @@ import (
 )
 
 type CreateDBCommand struct {
-	store *data.Database
+	store *data.Data
 }
 
 func (c *CreateDBCommand) Execute(connectionContext Context, params []string) (*Response, error) {

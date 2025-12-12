@@ -30,13 +30,12 @@ func (p *ProtocolCommand) Execute(commandContext Context, params []string) (*Res
 	return val, nil
 }
 
-func InitCommands(store *data.Database) map[string]ProtocolCommand {
+func InitCommands(store *data.Data) map[string]ProtocolCommand {
 	return map[string]ProtocolCommand{
-		"set":           {cmd: &SetCommand{store: store}},
-		"get":           {cmd: &GetCommand{store: store}},
-		"del":           {cmd: &DelCommand{store: store}},
-		"start_session": {cmd: &StartSessionCommand{}},
+		"add_workspace": {cmd: &AddWorkspaceCommand{store: store}},
+		"del_workspace": {cmd: &RemoveWorkspaceCommand{store: store}},
+		"add_catalog":   {cmd: &AddCatalogCommand{store: store}},
+		"del_catalog":   {cmd: &RemoveCatalogCommand{store: store}},
 		"health":        {cmd: &HealthCommand{}},
-		"syn":           {cmd: &SynCommand{}},
 	}
 }

@@ -17,7 +17,7 @@ import (
 	"github.com/segmentio/ksuid"
 )
 
-func New(connection net.Conn, sched *scheduler.Scheduler, store *data.Database, opts *Options) *Handler {
+func New(connection net.Conn, sched *scheduler.Scheduler, store *data.Data, opts *Options) *Handler {
 	connId := ksuid.New()
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil)).With("conn_id", connId)
 	requestParser := parser.New()

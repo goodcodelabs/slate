@@ -36,7 +36,12 @@ func run(cfg *configuration.Configuration, logger *slog.Logger) {
 	sched.Start()
 	defer sched.Stop()
 
-	store := data.New("default")
+	store, err := data.New("default", cfg.DataDir)
+	if err != nil {
+		logger.Error("Creating Database", "error", err)
+		return
+	}
+	defer closeDatabase(logger, store)
 
 	sem := make(chan struct{}, cfg.MaxConnections)
 
@@ -74,5 +79,13 @@ func closeListener(logger *slog.Logger, l net.Listener) {
 	err := l.Close()
 	if err != nil {
 		logger.Error("Closing Listener", "error", err)
+	}
+}
+
+func closeDatabase(logger *slog.Logger, db *data.Data) {
+	logger.Info("Closing Database")
+	err := db.Close()
+	if err != nil {
+		logger.Error("Closing Database", "error", err)
 	}
 }

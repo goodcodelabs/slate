@@ -1,43 +1,95 @@
 package data
 
-import "errors"
+import (
+	"errors"
 
-func New(name string) *Database {
-	return &Database{
-		name:    name,
-		kvStore: make(map[string]string),
+	"github.com/segmentio/ksuid"
+)
+
+func New(name, dataDir string) (*Data, error) {
+	db := &Data{
+		Workspaces: make(map[ksuid.KSUID]*Workspace),
+		Catalogs:   make(map[ksuid.KSUID]*Catalog),
 	}
+
+	return db, nil
 }
 
-func (d *Database) Set(key string, val string) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+func (db *Data) Close() error {
+	return nil
+}
 
-	d.kvStore[key] = val
+func (db *Data) AddWorkspace(name string) error {
+
+	if db.workspaceExists(name) {
+		return errors.New("workspace already exists")
+	}
+
+	w, err := newWorkspace(name, &WorkspaceConfig{})
+	if err != nil {
+		return err
+	}
+
+	db.Workspaces[w.ID] = w
 
 	return nil
 }
 
-func (d *Database) Get(key string) (string, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-
-	if val, ok := d.kvStore[key]; ok {
-		return val, nil
+func (db *Data) workspaceExists(name string) bool {
+	// Ensure there are no name collisions
+	for _, w := range db.Workspaces {
+		if w.Name == name {
+			return true
+		}
 	}
 
-	return "", errors.New("key_not_found")
+	return false
 }
 
-func (d *Database) Del(key string) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+func (db *Data) RemoveWorkspace(name string) error {
 
-	if _, ok := d.kvStore[key]; !ok {
-		return errors.New("key_not_found")
+	for _, w := range db.Workspaces {
+		if w.Name == name {
+			delete(db.Workspaces, w.ID)
+			return nil // short circuit search
+		}
 	}
 
-	delete(d.kvStore, key)
+	return errors.New("workspace not found")
+}
+
+func (db *Data) AddCatalog(name string) error {
+	if db.catalogExists(name) {
+		return errors.New("catalog already exists")
+	}
+
+	c, err := newCatalog(name)
+	if err != nil {
+		return err
+	}
+
+	db.Catalogs[c.ID] = c
 
 	return nil
+}
+
+func (db *Data) catalogExists(name string) bool {
+	for _, c := range db.Catalogs {
+		if c.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func (db *Data) RemoveCatalog(name string) error {
+
+	for _, c := range db.Catalogs {
+		if c.Name == name {
+			delete(db.Catalogs, c.ID)
+			return nil
+		}
+	}
+
+	return errors.New("catalog not found")
 }
