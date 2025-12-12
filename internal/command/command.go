@@ -36,6 +36,7 @@ func InitCommands(store *data.Data) map[string]ProtocolCommand {
 		"del_workspace": {cmd: &RemoveWorkspaceCommand{store: store}},
 		"add_catalog":   {cmd: &AddCatalogCommand{store: store}},
 		"del_catalog":   {cmd: &RemoveCatalogCommand{store: store}},
+		"ls_catalogs":   {cmd: &ListCatalogsCommand{store: store}},
 		"health":        {cmd: &HealthCommand{}},
 	}
 }

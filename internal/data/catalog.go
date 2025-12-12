@@ -4,7 +4,8 @@ import "github.com/segmentio/ksuid"
 
 func newCatalog(name string) (*Catalog, error) {
 	return &Catalog{
-		ID: ksuid.New(),
+		ID:   ksuid.New(),
+		Name: name,
 	}, nil
 }
 

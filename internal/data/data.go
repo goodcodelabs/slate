@@ -93,3 +93,11 @@ func (db *Data) RemoveCatalog(name string) error {
 
 	return errors.New("catalog not found")
 }
+
+func (db *Data) ListCatalogs() ([]Catalog, error) {
+	cs := make([]Catalog, 0, len(db.Catalogs))
+	for _, c := range db.Catalogs {
+		cs = append(cs, *c)
+	}
+	return cs, nil
+}

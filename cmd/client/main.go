@@ -31,4 +31,9 @@ func main() {
 	send("health")
 	send("add_workspace foo")
 	send("add_catalog bar")
+	send("add_catalog baz")
+	send("ls_catalogs")
+	send("add_catalog bunz")
+	send("del_catalog bar")
+	send("ls_catalogs")
 }
