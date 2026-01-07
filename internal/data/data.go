@@ -7,15 +7,28 @@ import (
 )
 
 func New(name, dataDir string) (*Data, error) {
-	db := &Data{
-		Workspaces: make(map[ksuid.KSUID]*Workspace),
-		Catalogs:   make(map[ksuid.KSUID]*Catalog),
+	// Initialize file store
+	store, err := NewFileStore(dataDir)
+	if err != nil {
+		return nil, err
 	}
+
+	// Load existing data from disk
+	db, err := store.Load()
+	if err != nil {
+		return nil, err
+	}
+
+	// Attach store to data
+	db.store = store
 
 	return db, nil
 }
 
 func (db *Data) Close() error {
+	if db.store != nil {
+		return db.store.Close()
+	}
 	return nil
 }
 
@@ -31,6 +44,15 @@ func (db *Data) AddWorkspace(name string) error {
 	}
 
 	db.Workspaces[w.ID] = w
+
+	// Persist to disk
+	if db.store != nil {
+		if err := db.store.SaveWorkspace(w); err != nil {
+			// Rollback in-memory change on persistence failure
+			delete(db.Workspaces, w.ID)
+			return err
+		}
+	}
 
 	return nil
 }
@@ -48,14 +70,32 @@ func (db *Data) workspaceExists(name string) bool {
 
 func (db *Data) RemoveWorkspace(name string) error {
 
+	var targetID ksuid.KSUID
+	var found bool
+
 	for _, w := range db.Workspaces {
 		if w.Name == name {
-			delete(db.Workspaces, w.ID)
-			return nil // short circuit search
+			targetID = w.ID
+			found = true
+			break
 		}
 	}
 
-	return errors.New("workspace not found")
+	if !found {
+		return errors.New("workspace not found")
+	}
+
+	// Remove from memory
+	delete(db.Workspaces, targetID)
+
+	// Persist to disk
+	if db.store != nil {
+		if err := db.store.DeleteWorkspace(targetID); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (db *Data) AddCatalog(name string) error {
@@ -69,6 +109,15 @@ func (db *Data) AddCatalog(name string) error {
 	}
 
 	db.Catalogs[c.ID] = c
+
+	// Persist to disk
+	if db.store != nil {
+		if err := db.store.SaveCatalog(c); err != nil {
+			// Rollback in-memory change on persistence failure
+			delete(db.Catalogs, c.ID)
+			return err
+		}
+	}
 
 	return nil
 }
@@ -84,14 +133,32 @@ func (db *Data) catalogExists(name string) bool {
 
 func (db *Data) RemoveCatalog(name string) error {
 
+	var targetID ksuid.KSUID
+	var found bool
+
 	for _, c := range db.Catalogs {
 		if c.Name == name {
-			delete(db.Catalogs, c.ID)
-			return nil
+			targetID = c.ID
+			found = true
+			break
 		}
 	}
 
-	return errors.New("catalog not found")
+	if !found {
+		return errors.New("catalog not found")
+	}
+
+	// Remove from memory
+	delete(db.Catalogs, targetID)
+
+	// Persist to disk
+	if db.store != nil {
+		if err := db.store.DeleteCatalog(targetID); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (db *Data) ListCatalogs() ([]Catalog, error) {
