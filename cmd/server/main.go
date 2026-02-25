@@ -8,9 +8,13 @@ import (
 	"os"
 	"os/signal"
 	"slate/cmd/server/configuration"
+	"slate/internal/agent"
 	"slate/internal/connection"
 	"slate/internal/data"
+	"slate/internal/llm"
 	"slate/internal/scheduler"
+	"slate/internal/tools"
+	"slate/internal/tools/builtin"
 )
 
 func main() {
@@ -32,7 +36,7 @@ func run(cfg *configuration.Configuration, logger *slog.Logger) {
 	}
 	defer closeListener(logger, listener)
 
-	sched := scheduler.NewScheduler()
+	sched := scheduler.NewScheduler(cfg.Workers)
 	sched.Start()
 	defer sched.Stop()
 
@@ -42,6 +46,15 @@ func run(cfg *configuration.Configuration, logger *slog.Logger) {
 		return
 	}
 	defer closeDatabase(logger, store)
+
+	registry := tools.NewRegistry()
+	registry.Register(builtin.NewHTTPFetchTool())
+	registry.Register(builtin.NewShellTool())
+	registry.Register(builtin.NewFileTool())
+
+	provider := llm.NewAnthropicProvider()
+	runner := agent.NewRunner(provider, store, registry)
+	runner.RegisterCallAgentTool(registry)
 
 	sem := make(chan struct{}, cfg.MaxConnections)
 
@@ -57,7 +70,7 @@ func run(cfg *configuration.Configuration, logger *slog.Logger) {
 		select {
 		case sem <- struct{}{}:
 			go func(c net.Conn) {
-				conn := connection.New(c, sched, store, &connection.Options{
+				conn := connection.New(c, sched, store, runner, &connection.Options{
 					ClientIdleTimeout: cfg.ClientIdleTimeout,
 				})
 

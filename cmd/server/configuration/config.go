@@ -11,6 +11,7 @@ type Configuration struct {
 	Timeout           int
 	ClientIdleTimeout int
 	DataDir           string
+	Workers           int
 }
 
 func New() *Configuration {
@@ -21,5 +22,6 @@ func New() *Configuration {
 		Timeout:           config.GetIntegerOrDefault("TIMEOUT", 500),
 		ClientIdleTimeout: config.GetIntegerOrDefault("CLIENT_IDLE_TIMEOUT_MS", 60000),
 		DataDir:           config.GetEnvOrDefault("DATA_DIR", "./data"),
+		Workers:           config.GetIntegerOrDefault("WORKERS", 4),
 	}
 }

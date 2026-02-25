@@ -3,6 +3,7 @@ package connection
 import (
 	"log/slog"
 	"net"
+	"slate/internal/agent"
 	"slate/internal/data"
 	"slate/internal/parser"
 	"slate/internal/scheduler"
@@ -18,6 +19,7 @@ type Handler struct {
 	logger        *slog.Logger
 	requestParser *parser.Parser
 	store         *data.Data
+	runner        *agent.Runner
 	sched         *scheduler.Scheduler
 
 	opts *Options

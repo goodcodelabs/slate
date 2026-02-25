@@ -6,6 +6,7 @@ import (
 
 type Scheduler struct {
 	activities chan *Activity
+	workers    int
 	wg         sync.WaitGroup
 }
 

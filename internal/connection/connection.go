@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"slate/internal/agent"
 	"slate/internal/command"
 	"slate/internal/data"
 	"slate/internal/parser"
@@ -17,7 +18,7 @@ import (
 	"github.com/segmentio/ksuid"
 )
 
-func New(connection net.Conn, sched *scheduler.Scheduler, store *data.Data, opts *Options) *Handler {
+func New(connection net.Conn, sched *scheduler.Scheduler, store *data.Data, runner *agent.Runner, opts *Options) *Handler {
 	connId := ksuid.New()
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil)).With("conn_id", connId)
 	requestParser := parser.New()
@@ -30,7 +31,8 @@ func New(connection net.Conn, sched *scheduler.Scheduler, store *data.Data, opts
 			SessionID: connId,
 		},
 
-		store: store,
+		store:  store,
+		runner: runner,
 
 		logger:        logger,
 		requestParser: requestParser,
@@ -89,7 +91,7 @@ func (h *Handler) HandleConnection(ctx context.Context) {
 			return
 		}
 
-		commands := command.InitCommands(h.store)
+		commands := command.InitCommands(h.store, h.runner, h.sched)
 
 		h.sched.Schedule(&scheduler.Activity{
 			Job: func() {
