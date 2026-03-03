@@ -73,11 +73,20 @@ func run(cfg *configuration.Configuration, logger *slog.Logger) {
 	})
 	runner.RegisterCallAgentTool(registry)
 
+	// Close the listener when the context is cancelled so Accept unblocks.
+	go func() {
+		<-ctx.Done()
+		_ = listener.Close()
+	}()
+
 	sem := make(chan struct{}, cfg.MaxConnections)
 
 	for {
 		c, err := listener.Accept()
 		if err != nil {
+			if ctx.Err() != nil {
+				return // clean shutdown
+			}
 			logger.Error("Accepting Connection", "error", err)
 			continue
 		}

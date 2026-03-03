@@ -5,16 +5,17 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/segmentio/ksuid"
 	"slate/internal/agent"
 	"slate/internal/data"
+
+	"github.com/segmentio/ksuid"
 )
 
 type AddWorkspaceCommand struct {
 	store *data.Data
 }
 
-func (c *AddWorkspaceCommand) Execute(connectionContext Context, params []string) (*Response, error) {
+func (c *AddWorkspaceCommand) Execute(_ Context, params []string) (*Response, error) {
 	err := c.store.AddWorkspace(params[0])
 	if err != nil {
 		return nil, err
@@ -26,7 +27,7 @@ type RemoveWorkspaceCommand struct {
 	store *data.Data
 }
 
-func (c *RemoveWorkspaceCommand) Execute(connectionContext Context, params []string) (*Response, error) {
+func (c *RemoveWorkspaceCommand) Execute(_ Context, params []string) (*Response, error) {
 	err := c.store.RemoveWorkspace(params[0])
 	if err != nil {
 		return nil, err

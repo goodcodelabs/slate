@@ -50,6 +50,5 @@ type JobResult struct {
 
 // PipelineInfo summarizes a pipeline.
 type PipelineInfo struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+	ID string `json:"pipeline_id"`
 }
