@@ -8,9 +8,15 @@ import (
 	"os"
 	"os/signal"
 	"slate/cmd/server/configuration"
+	"slate/internal/agent"
 	"slate/internal/connection"
 	"slate/internal/data"
+	"slate/internal/events"
+	"slate/internal/llm"
+	"slate/internal/metrics"
 	"slate/internal/scheduler"
+	"slate/internal/tools"
+	"slate/internal/tools/builtin"
 )
 
 func main() {
@@ -32,7 +38,7 @@ func run(cfg *configuration.Configuration, logger *slog.Logger) {
 	}
 	defer closeListener(logger, listener)
 
-	sched := scheduler.NewScheduler()
+	sched := scheduler.NewScheduler(cfg.Workers)
 	sched.Start()
 	defer sched.Stop()
 
@@ -43,11 +49,44 @@ func run(cfg *configuration.Configuration, logger *slog.Logger) {
 	}
 	defer closeDatabase(logger, store)
 
+	met := metrics.New()
+
+	evLogger, err := events.NewLogger(cfg.DataDir)
+	if err != nil {
+		logger.Error("Creating Event Logger", "error", err)
+		return
+	}
+
+	registry := tools.NewRegistry()
+	registry.Register(builtin.NewHTTPFetchTool())
+	registry.Register(builtin.NewShellTool())
+	registry.Register(builtin.NewFileTool())
+
+	extAgents := agent.NewExternalAgentRegistry()
+
+	provider := llm.NewAnthropicProvider()
+	runner := agent.NewRunner(provider, store, registry, agent.RunnerOptions{
+		Logger:         logger,
+		Metrics:        met,
+		Events:         evLogger,
+		ExternalAgents: extAgents,
+	})
+	runner.RegisterCallAgentTool(registry)
+
+	// Close the listener when the context is cancelled so Accept unblocks.
+	go func() {
+		<-ctx.Done()
+		_ = listener.Close()
+	}()
+
 	sem := make(chan struct{}, cfg.MaxConnections)
 
 	for {
 		c, err := listener.Accept()
 		if err != nil {
+			if ctx.Err() != nil {
+				return // clean shutdown
+			}
 			logger.Error("Accepting Connection", "error", err)
 			continue
 		}
@@ -57,7 +96,7 @@ func run(cfg *configuration.Configuration, logger *slog.Logger) {
 		select {
 		case sem <- struct{}{}:
 			go func(c net.Conn) {
-				conn := connection.New(c, sched, store, &connection.Options{
+				conn := connection.New(c, sched, store, runner, met, extAgents, &connection.Options{
 					ClientIdleTimeout: cfg.ClientIdleTimeout,
 				})
 

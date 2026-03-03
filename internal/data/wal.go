@@ -20,6 +20,10 @@ const (
 	OpRemoveWorkspace OperationType = "REMOVE_WORKSPACE"
 	OpAddCatalog      OperationType = "ADD_CATALOG"
 	OpRemoveCatalog   OperationType = "REMOVE_CATALOG"
+	OpAddThread       OperationType = "ADD_THREAD"
+	OpRemoveThread    OperationType = "REMOVE_THREAD"
+	OpAddPipeline     OperationType = "ADD_PIPELINE"
+	OpRemovePipeline  OperationType = "REMOVE_PIPELINE"
 )
 
 // WALEntry represents a single operation in the write-ahead log
@@ -169,6 +173,26 @@ func applyWALEntry(data *Data, entry *WALEntry) error {
 
 	case OpRemoveCatalog:
 		delete(data.Catalogs, entry.EntityID)
+
+	case OpAddThread:
+		var thread Thread
+		if err := msgpack.Unmarshal(entry.Data, &thread); err != nil {
+			return fmt.Errorf("failed to unmarshal thread: %w", err)
+		}
+		data.Threads[thread.ID] = &thread
+
+	case OpRemoveThread:
+		delete(data.Threads, entry.EntityID)
+
+	case OpAddPipeline:
+		var pipeline Pipeline
+		if err := msgpack.Unmarshal(entry.Data, &pipeline); err != nil {
+			return fmt.Errorf("failed to unmarshal pipeline: %w", err)
+		}
+		data.Pipelines[pipeline.ID] = &pipeline
+
+	case OpRemovePipeline:
+		delete(data.Pipelines, entry.EntityID)
 
 	default:
 		return fmt.Errorf("unknown operation type: %s", entry.Operation)

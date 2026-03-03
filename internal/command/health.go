@@ -7,6 +7,6 @@ import (
 type HealthCommand struct {
 }
 
-func (c *HealthCommand) Execute(connectionContext Context, params []string) (*Response, error) {
-	return &Response{Message: fmt.Sprintf("health check")}, nil
+func (c *HealthCommand) Execute(_ Context, _ []string) (*Response, error) {
+	return &Response{Message: fmt.Sprintf("ok")}, nil
 }

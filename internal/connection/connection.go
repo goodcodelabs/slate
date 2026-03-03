@@ -2,22 +2,26 @@ package connection
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"os"
+	"slate/internal/agent"
 	"slate/internal/command"
 	"slate/internal/data"
+	"slate/internal/metrics"
 	"slate/internal/parser"
 	"slate/internal/scheduler"
+	"strings"
 	"time"
 
 	"github.com/segmentio/ksuid"
 )
 
-func New(connection net.Conn, sched *scheduler.Scheduler, store *data.Data, opts *Options) *Handler {
+func New(connection net.Conn, sched *scheduler.Scheduler, store *data.Data, runner *agent.Runner, met *metrics.Metrics, extAgents *agent.ExternalAgentRegistry, opts *Options) *Handler {
 	connId := ksuid.New()
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil)).With("conn_id", connId)
 	requestParser := parser.New()
@@ -30,7 +34,10 @@ func New(connection net.Conn, sched *scheduler.Scheduler, store *data.Data, opts
 			SessionID: connId,
 		},
 
-		store: store,
+		store:          store,
+		runner:         runner,
+		metrics:        met,
+		externalAgents: extAgents,
 
 		logger:        logger,
 		requestParser: requestParser,
@@ -41,6 +48,11 @@ func New(connection net.Conn, sched *scheduler.Scheduler, store *data.Data, opts
 
 func (h *Handler) HandleConnection(ctx context.Context) {
 	defer h.CloseConnection()
+
+	if h.metrics != nil {
+		h.metrics.IncrConnections()
+		defer h.metrics.DecrConnections()
+	}
 
 	h.logger.Info("Connection Started", "ip", h.context.IPAddress, "conn_id", h.context.SessionID)
 
@@ -89,7 +101,13 @@ func (h *Handler) HandleConnection(ctx context.Context) {
 			return
 		}
 
-		commands := command.InitCommands(h.store)
+		// Short circuit for register_agent — switches connection to agent mode.
+		if req.Command == "register_agent" {
+			h.handleAgentRegistration(ctx, req.Params)
+			return
+		}
+
+		commands := command.InitCommands(h.store, h.runner, h.sched, h.metrics)
 
 		h.sched.Schedule(&scheduler.Activity{
 			Job: func() {
@@ -150,4 +168,50 @@ func getIPAddress(conn net.Conn) string {
 		return ra.IP.String()
 	}
 	return ""
+}
+
+// handleAgentRegistration processes register_agent <catalog_id> <name> <instructions...>.
+// It registers the current connection as an external agent, responds with the agent ID,
+// then blocks until the server shuts down or the agent disconnects.
+func (h *Handler) handleAgentRegistration(ctx context.Context, params []string) {
+	if h.externalAgents == nil {
+		_ = h.Respond("error|external agent registration not enabled")
+		return
+	}
+	if len(params) < 3 {
+		_ = h.Respond("error|usage: register_agent <catalog_id> <name> <instructions...>")
+		return
+	}
+
+	catalogID, err := ksuid.Parse(params[0])
+	if err != nil {
+		_ = h.Respond(fmt.Sprintf("error|invalid catalog_id: %s", err))
+		return
+	}
+	name := params[1]
+	instructions := strings.Join(params[2:], " ")
+
+	a, err := h.store.RegisterExternalAgent(catalogID, name, instructions)
+	if err != nil {
+		_ = h.Respond(fmt.Sprintf("error|%s", err))
+		return
+	}
+
+	agentConn := h.externalAgents.Register(a.ID, h.Connection)
+	defer h.externalAgents.Unregister(a.ID)
+
+	h.logger.Info("External agent registered", "agent_id", a.ID, "name", a.Name)
+
+	out, _ := json.Marshal(map[string]string{"agent_id": a.ID.String()})
+	if _, err := h.Connection.Write(append(out, '\n')); err != nil {
+		return
+	}
+
+	// Hold the connection open until the server shuts down or the agent drops.
+	select {
+	case <-ctx.Done():
+	case <-agentConn.Done():
+	}
+
+	h.logger.Info("External agent disconnected", "agent_id", a.ID)
 }
