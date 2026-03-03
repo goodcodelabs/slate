@@ -96,6 +96,7 @@ type Agent struct {
 	Temperature  float64           `msgpack:"temperature"`
 	Tools        []string          `msgpack:"tools"`
 	Metadata     map[string]string `msgpack:"metadata"`
+	External     bool              `msgpack:"external"`
 }
 
 type Catalog struct {

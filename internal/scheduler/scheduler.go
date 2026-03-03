@@ -43,3 +43,8 @@ func (s *Scheduler) Stop() {
 	close(s.activities)
 	s.wg.Wait()
 }
+
+// QueueDepth returns the number of activities currently waiting to be executed.
+func (s *Scheduler) QueueDepth() int {
+	return len(s.activities)
+}

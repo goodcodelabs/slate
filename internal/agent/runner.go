@@ -21,19 +21,21 @@ const (
 
 // RunnerOptions bundles optional observability dependencies for a Runner.
 type RunnerOptions struct {
-	Logger  *slog.Logger
-	Metrics *metrics.Metrics
-	Events  *events.Logger
+	Logger         *slog.Logger
+	Metrics        *metrics.Metrics
+	Events         *events.Logger
+	ExternalAgents *ExternalAgentRegistry
 }
 
 // Runner executes an agent against an LLM provider, managing the agentic loop.
 type Runner struct {
-	provider llm.Provider
-	store    *data.Data
-	registry *tools.Registry
-	logger   *slog.Logger
-	metrics  *metrics.Metrics
-	events   *events.Logger
+	provider       llm.Provider
+	store          *data.Data
+	registry       *tools.Registry
+	logger         *slog.Logger
+	metrics        *metrics.Metrics
+	events         *events.Logger
+	externalAgents *ExternalAgentRegistry
 }
 
 // RunResult holds the output of a single agent run.
@@ -46,12 +48,13 @@ type RunResult struct {
 
 func NewRunner(provider llm.Provider, store *data.Data, registry *tools.Registry, opts RunnerOptions) *Runner {
 	return &Runner{
-		provider: provider,
-		store:    store,
-		registry: registry,
-		logger:   opts.Logger,
-		metrics:  opts.Metrics,
-		events:   opts.Events,
+		provider:       provider,
+		store:          store,
+		registry:       registry,
+		logger:         opts.Logger,
+		metrics:        opts.Metrics,
+		events:         opts.Events,
+		externalAgents: opts.ExternalAgents,
 	}
 }
 
@@ -123,6 +126,25 @@ func (r *Runner) RunWithOptions(ctx context.Context, agentID ksuid.KSUID, input 
 	agent, _, err := r.store.FindAgent(agentID)
 	if err != nil {
 		return nil, fmt.Errorf("loading agent: %w", err)
+	}
+
+	// Dispatch to an external process if the agent is registered as external.
+	if agent.External {
+		if r.externalAgents == nil {
+			return nil, fmt.Errorf("external agent registry not configured")
+		}
+		conn, ok := r.externalAgents.Get(agentID)
+		if !ok {
+			return nil, fmt.Errorf("external agent %s is not connected", agentID)
+		}
+		response, err := conn.Run(ctx, input)
+		if err != nil {
+			if r.metrics != nil {
+				r.metrics.RecordError()
+			}
+			return nil, fmt.Errorf("external agent run: %w", err)
+		}
+		return &RunResult{Response: response}, nil
 	}
 
 	model := agent.Model

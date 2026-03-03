@@ -207,6 +207,31 @@ func (db *Data) AddAgent(catalogID ksuid.KSUID, name string) (*Agent, error) {
 	return a, nil
 }
 
+func (db *Data) RegisterExternalAgent(catalogID ksuid.KSUID, name, instructions string) (*Agent, error) {
+	catalog, ok := db.Catalogs[catalogID]
+	if !ok {
+		return nil, errors.New("catalog not found")
+	}
+
+	a := &Agent{
+		ID:           ksuid.New(),
+		Name:         name,
+		Instructions: instructions,
+		External:     true,
+	}
+
+	catalog.AddAgent(a)
+
+	if db.store != nil {
+		if err := db.store.SaveCatalog(catalog); err != nil {
+			catalog.Agents = catalog.Agents[:len(catalog.Agents)-1]
+			return nil, err
+		}
+	}
+
+	return a, nil
+}
+
 func (db *Data) FindAgent(agentID ksuid.KSUID) (*Agent, *Catalog, error) {
 	for _, catalog := range db.Catalogs {
 		for _, agent := range catalog.Agents {

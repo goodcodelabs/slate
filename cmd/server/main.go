@@ -11,7 +11,9 @@ import (
 	"slate/internal/agent"
 	"slate/internal/connection"
 	"slate/internal/data"
+	"slate/internal/events"
 	"slate/internal/llm"
+	"slate/internal/metrics"
 	"slate/internal/scheduler"
 	"slate/internal/tools"
 	"slate/internal/tools/builtin"
@@ -47,13 +49,28 @@ func run(cfg *configuration.Configuration, logger *slog.Logger) {
 	}
 	defer closeDatabase(logger, store)
 
+	met := metrics.New()
+
+	evLogger, err := events.NewLogger(cfg.DataDir)
+	if err != nil {
+		logger.Error("Creating Event Logger", "error", err)
+		return
+	}
+
 	registry := tools.NewRegistry()
 	registry.Register(builtin.NewHTTPFetchTool())
 	registry.Register(builtin.NewShellTool())
 	registry.Register(builtin.NewFileTool())
 
+	extAgents := agent.NewExternalAgentRegistry()
+
 	provider := llm.NewAnthropicProvider()
-	runner := agent.NewRunner(provider, store, registry)
+	runner := agent.NewRunner(provider, store, registry, agent.RunnerOptions{
+		Logger:         logger,
+		Metrics:        met,
+		Events:         evLogger,
+		ExternalAgents: extAgents,
+	})
 	runner.RegisterCallAgentTool(registry)
 
 	sem := make(chan struct{}, cfg.MaxConnections)
@@ -70,7 +87,7 @@ func run(cfg *configuration.Configuration, logger *slog.Logger) {
 		select {
 		case sem <- struct{}{}:
 			go func(c net.Conn) {
-				conn := connection.New(c, sched, store, runner, &connection.Options{
+				conn := connection.New(c, sched, store, runner, met, extAgents, &connection.Options{
 					ClientIdleTimeout: cfg.ClientIdleTimeout,
 				})
 

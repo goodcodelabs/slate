@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/segmentio/ksuid"
 	"slate/internal/data"
+	"slate/internal/events"
 )
 
 // RunPipeline executes a pipeline and returns the final output string.
@@ -21,9 +23,43 @@ func (r *Runner) RunPipeline(ctx context.Context, pipelineID ksuid.KSUID, input 
 		return "", fmt.Errorf("loading pipeline: %w", err)
 	}
 
+	wsStr := pipeline.WorkspaceID.String()
+	pidStr := pipelineID.String()
+	start := time.Now()
+
+	r.emitEvent(events.Event{
+		WorkspaceID: wsStr,
+		Type:        events.EventPipelineStarted,
+		PipelineID:  pidStr,
+	})
+
 	if len(pipeline.Steps) == 0 {
+		r.emitEvent(events.Event{
+			WorkspaceID: wsStr,
+			Type:        events.EventPipelineCompleted,
+			PipelineID:  pidStr,
+			LatencyMs:   time.Since(start).Milliseconds(),
+		})
 		return input, nil
 	}
+
+	// Emit a completed or failed event when the function returns.
+	var runErr error
+	defer func() {
+		evType := events.EventPipelineCompleted
+		errStr := ""
+		if runErr != nil {
+			evType = events.EventPipelineFailed
+			errStr = runErr.Error()
+		}
+		r.emitEvent(events.Event{
+			WorkspaceID: wsStr,
+			Type:        evType,
+			PipelineID:  pidStr,
+			LatencyMs:   time.Since(start).Milliseconds(),
+			Error:       errStr,
+		})
+	}()
 
 	current := input
 	i := 0
@@ -57,7 +93,8 @@ func (r *Runner) RunPipeline(ctx context.Context, pipelineID ksuid.KSUID, input 
 
 			for _, err := range errs {
 				if err != nil {
-					return "", err
+					runErr = err
+					return "", runErr
 				}
 			}
 			current = strings.Join(results, "\n---\n")
@@ -65,7 +102,8 @@ func (r *Runner) RunPipeline(ctx context.Context, pipelineID ksuid.KSUID, input 
 			// Sequential: run and advance output.
 			result, err := r.Run(ctx, step.AgentID, current, nil)
 			if err != nil {
-				return "", fmt.Errorf("pipeline step %d: %w", i, err)
+				runErr = fmt.Errorf("pipeline step %d: %w", i, err)
+				return "", runErr
 			}
 			current = result.Response
 			i++

@@ -3,6 +3,7 @@ package command
 import (
 	"slate/internal/agent"
 	"slate/internal/data"
+	"slate/internal/metrics"
 	"slate/internal/scheduler"
 
 	"github.com/segmentio/ksuid"
@@ -33,8 +34,12 @@ const (
 	CmdCreatePipeline       = "create_pipeline"
 	CmdAddPipelineStep      = "add_pipeline_step"
 	CmdRunPipeline          = "run_pipeline"
-	CmdJobStatus            = "job_status"
-	CmdJobResult            = "job_result"
+	CmdJobStatus      = "job_status"
+	CmdJobResult      = "job_result"
+	CmdSystemMetrics  = "system_metrics"
+	CmdSystemStats    = "system_stats"
+	CmdListJobs       = "ls_jobs"
+	CmdCancelJob      = "cancel_job"
 )
 
 type Command interface {
@@ -61,7 +66,7 @@ func (p *ProtocolCommand) Execute(commandContext Context, params []string) (*Res
 	return val, nil
 }
 
-func InitCommands(store *data.Data, runner *agent.Runner, sched *scheduler.Scheduler) map[string]ProtocolCommand {
+func InitCommands(store *data.Data, runner *agent.Runner, sched *scheduler.Scheduler, met *metrics.Metrics) map[string]ProtocolCommand {
 	return map[string]ProtocolCommand{
 		CmdAddWorkspace:         {cmd: &AddWorkspaceCommand{store: store}},
 		CmdDelWorkspace:         {cmd: &RemoveWorkspaceCommand{store: store}},
@@ -86,7 +91,11 @@ func InitCommands(store *data.Data, runner *agent.Runner, sched *scheduler.Sched
 		CmdCreatePipeline:       {cmd: &CreatePipelineCommand{store: store}},
 		CmdAddPipelineStep:      {cmd: &AddPipelineStepCommand{store: store}},
 		CmdRunPipeline:          {cmd: &RunPipelineCommand{store: store, runner: runner, sched: sched}},
-		CmdJobStatus:            {cmd: &JobStatusCommand{store: store}},
-		CmdJobResult:            {cmd: &JobResultCommand{store: store}},
+		CmdJobStatus:     {cmd: &JobStatusCommand{store: store}},
+		CmdJobResult:     {cmd: &JobResultCommand{store: store}},
+		CmdSystemMetrics: {cmd: &SystemMetricsCommand{metrics: met}},
+		CmdSystemStats:   {cmd: &SystemStatsCommand{store: store, sched: sched, metrics: met}},
+		CmdListJobs:      {cmd: &ListJobsCommand{store: store}},
+		CmdCancelJob:     {cmd: &CancelJobCommand{store: store}},
 	}
 }

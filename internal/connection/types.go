@@ -5,6 +5,7 @@ import (
 	"net"
 	"slate/internal/agent"
 	"slate/internal/data"
+	"slate/internal/metrics"
 	"slate/internal/parser"
 	"slate/internal/scheduler"
 
@@ -16,11 +17,13 @@ type Handler struct {
 
 	Connection net.Conn
 
-	logger        *slog.Logger
-	requestParser *parser.Parser
-	store         *data.Data
-	runner        *agent.Runner
-	sched         *scheduler.Scheduler
+	logger         *slog.Logger
+	requestParser  *parser.Parser
+	store          *data.Data
+	runner         *agent.Runner
+	sched          *scheduler.Scheduler
+	metrics        *metrics.Metrics
+	externalAgents *agent.ExternalAgentRegistry
 
 	opts *Options
 }

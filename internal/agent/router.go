@@ -42,7 +42,37 @@ func (r *Runner) RunWorkspaceChat(ctx context.Context, workspaceID ksuid.KSUID, 
 		}
 	}
 
-	return r.RunWithOptions(ctx, workspace.Config.RouterAgentID, input, nil, RunOptions{
+	routerID := workspace.Config.RouterAgentID
+	wsStr := workspaceID.String()
+	start := time.Now()
+
+	r.emitEvent(events.Event{
+		WorkspaceID: wsStr,
+		Type:        events.EventAgentRunStarted,
+		AgentID:     routerID.String(),
+	})
+
+	result, err := r.RunWithOptions(ctx, routerID, input, nil, RunOptions{
 		SystemPromptSuffix: sb.String(),
 	})
+	if err != nil {
+		r.emitEvent(events.Event{
+			WorkspaceID: wsStr,
+			Type:        events.EventAgentRunFailed,
+			AgentID:     routerID.String(),
+			Error:       err.Error(),
+		})
+		return nil, err
+	}
+
+	r.emitEvent(events.Event{
+		WorkspaceID:  wsStr,
+		Type:         events.EventAgentRunCompleted,
+		AgentID:      routerID.String(),
+		LatencyMs:    time.Since(start).Milliseconds(),
+		InputTokens:  result.InputTokens,
+		OutputTokens: result.OutputTokens,
+	})
+
+	return result, nil
 }
