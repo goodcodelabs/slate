@@ -3,6 +3,7 @@ package agent_test
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/segmentio/ksuid"
@@ -189,6 +190,181 @@ func (c *captureSystemPromptProvider) Complete(_ context.Context, req llm.Comple
 		c.onCall(req)
 	}
 	return c.response, nil
+}
+
+func TestRunner_RunAgentThread_Success(t *testing.T) {
+	p := &fakeProvider{responses: []*llm.CompletionResponse{
+		textResponse("agent thread response"),
+	}}
+	runner, db := newRunnerDB(t, p)
+	agentID := addTestAgent(t, db)
+
+	thread, err := db.NewAgentThread(agentID, "my-thread")
+	if err != nil {
+		t.Fatalf("NewAgentThread: %v", err)
+	}
+
+	result, err := runner.RunAgentThread(context.Background(), thread.ID, "hello")
+	if err != nil {
+		t.Fatalf("RunAgentThread: %v", err)
+	}
+	if result.Response != "agent thread response" {
+		t.Errorf("Response = %q, want %q", result.Response, "agent thread response")
+	}
+
+	// Messages should be persisted to the thread.
+	updated, err := db.GetAgentThread(thread.ID)
+	if err != nil {
+		t.Fatalf("GetAgentThread after run: %v", err)
+	}
+	if len(updated.Messages) < 2 {
+		t.Errorf("expected at least 2 messages persisted, got %d", len(updated.Messages))
+	}
+}
+
+func TestRunner_RunAgentThread_WithHistory(t *testing.T) {
+	p := &fakeProvider{responses: []*llm.CompletionResponse{
+		textResponse("first"),
+		textResponse("second"),
+	}}
+	runner, db := newRunnerDB(t, p)
+	agentID := addTestAgent(t, db)
+
+	thread, err := db.NewAgentThread(agentID, "history-thread")
+	if err != nil {
+		t.Fatalf("NewAgentThread: %v", err)
+	}
+
+	// First turn.
+	if _, err := runner.RunAgentThread(context.Background(), thread.ID, "turn 1"); err != nil {
+		t.Fatalf("first RunAgentThread: %v", err)
+	}
+
+	// Second turn — should see the prior messages in history.
+	result, err := runner.RunAgentThread(context.Background(), thread.ID, "turn 2")
+	if err != nil {
+		t.Fatalf("second RunAgentThread: %v", err)
+	}
+	if result.Response != "second" {
+		t.Errorf("Response = %q, want %q", result.Response, "second")
+	}
+
+	updated, err := db.GetAgentThread(thread.ID)
+	if err != nil {
+		t.Fatalf("GetAgentThread: %v", err)
+	}
+	// 2 turns × (user + assistant) = 4 messages.
+	if len(updated.Messages) != 4 {
+		t.Errorf("expected 4 messages after 2 turns, got %d", len(updated.Messages))
+	}
+}
+
+func TestRunner_RunAgentThread_AgentNotFound(t *testing.T) {
+	p := &fakeProvider{responses: []*llm.CompletionResponse{textResponse("x")}}
+	runner, db := newRunnerDB(t, p)
+
+	// Create agent thread then delete the underlying agent by pointing to an unknown ID.
+	// Easiest: just create a thread with a fake agentID directly in the map.
+	fakeID := ksuid.New()
+	db.AgentThreads[fakeID] = &data.AgentThread{
+		ID:      fakeID,
+		AgentID: ksuid.New(), // nonexistent agent
+		Name:    "orphan",
+		State:   data.ThreadActive,
+	}
+
+	_, err := runner.RunAgentThread(context.Background(), fakeID, "hi")
+	if err == nil {
+		t.Fatal("expected error when agent not found, got nil")
+	}
+}
+
+func TestRunner_RunAgentThread_ThreadNotFound(t *testing.T) {
+	p := &fakeProvider{responses: []*llm.CompletionResponse{textResponse("x")}}
+	runner, _ := newRunnerDB(t, p)
+
+	_, err := runner.RunAgentThread(context.Background(), ksuid.New(), "hi")
+	if err == nil {
+		t.Fatal("expected error for nonexistent thread, got nil")
+	}
+}
+
+func TestRunner_RunThread_NoRouter(t *testing.T) {
+	p := &fakeProvider{responses: []*llm.CompletionResponse{textResponse("x")}}
+	runner, db := newRunnerDB(t, p)
+
+	// Create a workspace without a router agent.
+	if err := db.AddWorkspace("no-router-ws"); err != nil {
+		t.Fatalf("AddWorkspace: %v", err)
+	}
+	var wsID ksuid.KSUID
+	for id, w := range db.Workspaces {
+		if w.Name == "no-router-ws" {
+			wsID = id
+			break
+		}
+	}
+
+	thread, err := db.NewThread(wsID, "test-thread")
+	if err != nil {
+		t.Fatalf("NewThread: %v", err)
+	}
+
+	_, err = runner.RunThread(context.Background(), thread.ID, "hello")
+	if err == nil {
+		t.Fatal("expected error when workspace has no router, got nil")
+	}
+	if !strings.Contains(err.Error(), "router") {
+		t.Errorf("error %q should mention router", err.Error())
+	}
+}
+
+func TestRunner_RunThread_RoutesViaWorkspaceRouter(t *testing.T) {
+	p := &fakeProvider{responses: []*llm.CompletionResponse{
+		textResponse("router response"),
+	}}
+	runner, db := newRunnerDB(t, p)
+
+	// Set up workspace with catalog and router agent.
+	if err := db.AddWorkspace("router-ws"); err != nil {
+		t.Fatalf("AddWorkspace: %v", err)
+	}
+	var wsID ksuid.KSUID
+	for id, w := range db.Workspaces {
+		if w.Name == "router-ws" {
+			wsID = id
+			break
+		}
+	}
+
+	routerAgentID := addTestAgent(t, db)
+
+	if err := db.SetWorkspaceRouter(wsID, routerAgentID); err != nil {
+		t.Fatalf("SetWorkspaceRouter: %v", err)
+	}
+
+	thread, err := db.NewThread(wsID, "router-thread")
+	if err != nil {
+		t.Fatalf("NewThread: %v", err)
+	}
+
+	result, err := runner.RunThread(context.Background(), thread.ID, "hello")
+	if err != nil {
+		t.Fatalf("RunThread: %v", err)
+	}
+	if result.Response != "router response" {
+		t.Errorf("Response = %q, want %q", result.Response, "router response")
+	}
+
+	// Messages should be persisted to the thread.
+	updated, err := db.GetThread(thread.ID)
+	if err != nil {
+		t.Fatalf("GetThread after RunThread: %v", err)
+	}
+	// Should have at least the user message and assistant response.
+	if len(updated.Messages) < 2 {
+		t.Errorf("expected at least 2 messages persisted, got %d", len(updated.Messages))
+	}
 }
 
 func TestRunner_RunWithOptions_SystemPromptSuffix(t *testing.T) {

@@ -9,6 +9,7 @@ import (
 	"github.com/segmentio/ksuid"
 	"slate/internal/agent"
 	"slate/internal/data"
+	"slate/internal/scheduler"
 )
 
 // AddAgentCommand handles: add_agent <catalog_id> <name>
@@ -72,8 +73,11 @@ func (c *SetAgentModelCommand) Execute(_ Context, params []string) (*Response, e
 }
 
 // RunAgentCommand handles: run_agent <agent_id> <input...>
+// Returns a job_id immediately; poll job_status / job_result for the response.
 type RunAgentCommand struct {
+	store  *data.Data
 	runner *agent.Runner
+	sched  *scheduler.Scheduler
 }
 
 func (c *RunAgentCommand) Execute(_ Context, params []string) (*Response, error) {
@@ -85,9 +89,33 @@ func (c *RunAgentCommand) Execute(_ Context, params []string) (*Response, error)
 		return nil, fmt.Errorf("invalid agent_id: %w", err)
 	}
 	input := strings.Join(params[1:], " ")
-	result, err := c.runner.Run(context.Background(), agentID, input, nil)
+
+	// Eagerly validate the agent exists so bad IDs fail before a job is created.
+	if _, _, err := c.store.FindAgent(agentID); err != nil {
+		return nil, fmt.Errorf("agent not found")
+	}
+
+	job, err := c.store.CreateJob("agent_run", ksuid.KSUID{}, ksuid.KSUID{}, input)
 	if err != nil {
 		return nil, err
 	}
-	return &Response{Message: result.Response}, nil
+
+	jobCtx, cancel := context.WithCancel(context.Background())
+	_ = c.store.SetJobCancel(job.ID, cancel)
+
+	c.sched.Schedule(&scheduler.Activity{
+		Job: func() {
+			defer cancel()
+			_ = c.store.UpdateJob(job.ID, data.JobRunning, "", "")
+			result, runErr := c.runner.Run(jobCtx, agentID, input, nil)
+			if runErr != nil {
+				_ = c.store.UpdateJob(job.ID, data.JobFailed, "", runErr.Error())
+			} else {
+				_ = c.store.UpdateJob(job.ID, data.JobCompleted, result.Response, "")
+			}
+		},
+	})
+
+	out, _ := json.Marshal(map[string]string{"job_id": job.ID.String()})
+	return &Response{Message: string(out)}, nil
 }

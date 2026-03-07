@@ -10,6 +10,16 @@ type AgentInfo struct {
 type ThreadInfo struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
+	State     string `json:"state"`
+	Messages  int    `json:"messages"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
+}
+
+// AgentThreadInfo summarizes a conversation thread bound to a specific agent.
+type AgentThreadInfo struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
 	AgentID   string `json:"agent_id"`
 	State     string `json:"state"`
 	Messages  int    `json:"messages"`
@@ -29,6 +39,7 @@ type JobInfo struct {
 	Type        string `json:"type"`
 	WorkspaceID string `json:"workspace_id"`
 	PipelineID  string `json:"pipeline_id,omitempty"`
+	ThreadID    string `json:"thread_id,omitempty"`
 	Status      string `json:"status"`
 	CreatedAt   string `json:"created_at"`
 }

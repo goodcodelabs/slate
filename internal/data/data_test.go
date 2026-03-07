@@ -5,6 +5,7 @@ import (
 
 	"github.com/segmentio/ksuid"
 	"slate/internal/data"
+	"slate/internal/llm"
 )
 
 func newTestData(t *testing.T) *data.Data {
@@ -394,33 +395,26 @@ func TestListJobs_FilteredByWorkspace(t *testing.T) {
 
 // ---- Thread tests ----
 
-// setupWsAndAgent creates a workspace+catalog+agent and returns their IDs.
-func setupWsAndAgent(t *testing.T, db *data.Data) (wsID ksuid.KSUID, agentID ksuid.KSUID) {
+// setupWorkspace creates a workspace and returns its ID.
+func setupWorkspace(t *testing.T, db *data.Data, name string) ksuid.KSUID {
 	t.Helper()
-	if err := db.AddWorkspace("th-ws"); err != nil {
-		t.Fatalf("AddWorkspace: %v", err)
+	if err := db.AddWorkspace(name); err != nil {
+		t.Fatalf("AddWorkspace %q: %v", name, err)
 	}
-	// Get workspace ID from the exported Workspaces map.
 	for id, w := range db.Workspaces {
-		if w.Name == "th-ws" {
-			wsID = id
-			break
+		if w.Name == name {
+			return id
 		}
 	}
-
-	catID := getCatalogID(t, db, "th-cat")
-	a, err := db.AddAgent(catID, "th-agent")
-	if err != nil {
-		t.Fatalf("AddAgent: %v", err)
-	}
-	return wsID, a.ID
+	t.Fatalf("workspace %q not found after add", name)
+	return ksuid.KSUID{}
 }
 
 func TestNewThread_Success(t *testing.T) {
 	db := newTestData(t)
-	wsID, agentID := setupWsAndAgent(t, db)
+	wsID := setupWorkspace(t, db, "th-ws")
 
-	thread, err := db.NewThread(wsID, agentID, "my-thread")
+	thread, err := db.NewThread(wsID, "my-thread")
 	if err != nil {
 		t.Fatalf("NewThread: %v", err)
 	}
@@ -434,9 +428,9 @@ func TestNewThread_Success(t *testing.T) {
 
 func TestGetThread_Found(t *testing.T) {
 	db := newTestData(t)
-	wsID, agentID := setupWsAndAgent(t, db)
+	wsID := setupWorkspace(t, db, "th-ws2")
 
-	thread, err := db.NewThread(wsID, agentID, "t1")
+	thread, err := db.NewThread(wsID, "t1")
 	if err != nil {
 		t.Fatalf("NewThread: %v", err)
 	}
@@ -460,9 +454,9 @@ func TestGetThread_NotFound(t *testing.T) {
 
 func TestDeleteThread(t *testing.T) {
 	db := newTestData(t)
-	wsID, agentID := setupWsAndAgent(t, db)
+	wsID := setupWorkspace(t, db, "th-ws3")
 
-	thread, err := db.NewThread(wsID, agentID, "to-delete")
+	thread, err := db.NewThread(wsID, "to-delete")
 	if err != nil {
 		t.Fatalf("NewThread: %v", err)
 	}
@@ -476,10 +470,10 @@ func TestDeleteThread(t *testing.T) {
 
 func TestListThreads_ByWorkspace(t *testing.T) {
 	db := newTestData(t)
-	wsID, agentID := setupWsAndAgent(t, db)
+	wsID := setupWorkspace(t, db, "th-ws4")
 
-	_, _ = db.NewThread(wsID, agentID, "t1")
-	_, _ = db.NewThread(wsID, agentID, "t2")
+	_, _ = db.NewThread(wsID, "t1")
+	_, _ = db.NewThread(wsID, "t2")
 
 	threads, err := db.ListThreads(wsID)
 	if err != nil {
@@ -487,6 +481,156 @@ func TestListThreads_ByWorkspace(t *testing.T) {
 	}
 	if len(threads) != 2 {
 		t.Errorf("expected 2 threads, got %d", len(threads))
+	}
+}
+
+// ---- AgentThread tests ----
+
+// getAgentID creates a catalog+agent and returns the agent's ID.
+func getAgentID(t *testing.T, db *data.Data, suffix string) ksuid.KSUID {
+	t.Helper()
+	catName := "at-cat-" + suffix
+	catID := getCatalogID(t, db, catName)
+	a, err := db.AddAgent(catID, "at-agent-"+suffix)
+	if err != nil {
+		t.Fatalf("AddAgent: %v", err)
+	}
+	return a.ID
+}
+
+func TestNewAgentThread_Success(t *testing.T) {
+	db := newTestData(t)
+	agentID := getAgentID(t, db, "1")
+
+	thread, err := db.NewAgentThread(agentID, "my-agent-thread")
+	if err != nil {
+		t.Fatalf("NewAgentThread: %v", err)
+	}
+	if thread.Name != "my-agent-thread" {
+		t.Errorf("Name = %q, want %q", thread.Name, "my-agent-thread")
+	}
+	if thread.AgentID != agentID {
+		t.Error("AgentID mismatch")
+	}
+	if thread.ID == (ksuid.KSUID{}) {
+		t.Error("ID should not be zero")
+	}
+}
+
+func TestNewAgentThread_AgentNotFound(t *testing.T) {
+	db := newTestData(t)
+	_, err := db.NewAgentThread(ksuid.New(), "nope")
+	if err == nil {
+		t.Fatal("expected error for unknown agent, got nil")
+	}
+}
+
+func TestGetAgentThread_Found(t *testing.T) {
+	db := newTestData(t)
+	agentID := getAgentID(t, db, "2")
+
+	thread, err := db.NewAgentThread(agentID, "get-me")
+	if err != nil {
+		t.Fatalf("NewAgentThread: %v", err)
+	}
+
+	got, err := db.GetAgentThread(thread.ID)
+	if err != nil {
+		t.Fatalf("GetAgentThread: %v", err)
+	}
+	if got.ID != thread.ID {
+		t.Error("ID mismatch")
+	}
+}
+
+func TestGetAgentThread_NotFound(t *testing.T) {
+	db := newTestData(t)
+	_, err := db.GetAgentThread(ksuid.New())
+	if err == nil {
+		t.Fatal("expected error for nonexistent agent thread, got nil")
+	}
+}
+
+func TestDeleteAgentThread(t *testing.T) {
+	db := newTestData(t)
+	agentID := getAgentID(t, db, "3")
+
+	thread, err := db.NewAgentThread(agentID, "delete-me")
+	if err != nil {
+		t.Fatalf("NewAgentThread: %v", err)
+	}
+	if err := db.DeleteAgentThread(thread.ID); err != nil {
+		t.Fatalf("DeleteAgentThread: %v", err)
+	}
+	if _, err := db.GetAgentThread(thread.ID); err == nil {
+		t.Error("expected error after delete, got nil")
+	}
+}
+
+func TestListAgentThreads_ByAgent(t *testing.T) {
+	db := newTestData(t)
+	agentID := getAgentID(t, db, "4")
+
+	_, _ = db.NewAgentThread(agentID, "t1")
+	_, _ = db.NewAgentThread(agentID, "t2")
+
+	threads, err := db.ListAgentThreads(agentID)
+	if err != nil {
+		t.Fatalf("ListAgentThreads: %v", err)
+	}
+	if len(threads) != 2 {
+		t.Errorf("expected 2 threads, got %d", len(threads))
+	}
+}
+
+func TestListAgentThreads_AgentNotFound(t *testing.T) {
+	db := newTestData(t)
+	_, err := db.ListAgentThreads(ksuid.New())
+	if err == nil {
+		t.Fatal("expected error for unknown agent, got nil")
+	}
+}
+
+func TestListAgentThreads_DoesNotCrossAgents(t *testing.T) {
+	db := newTestData(t)
+	agentID1 := getAgentID(t, db, "5a")
+	agentID2 := getAgentID(t, db, "5b")
+
+	_, _ = db.NewAgentThread(agentID1, "agent1-thread")
+	_, _ = db.NewAgentThread(agentID2, "agent2-thread")
+
+	threads, err := db.ListAgentThreads(agentID1)
+	if err != nil {
+		t.Fatalf("ListAgentThreads: %v", err)
+	}
+	if len(threads) != 1 {
+		t.Errorf("expected 1 thread for agent1, got %d", len(threads))
+	}
+}
+
+func TestAppendAgentMessage(t *testing.T) {
+	db := newTestData(t)
+	agentID := getAgentID(t, db, "6")
+
+	thread, err := db.NewAgentThread(agentID, "msg-thread")
+	if err != nil {
+		t.Fatalf("NewAgentThread: %v", err)
+	}
+
+	msg := llm.Message{
+		Role:    llm.RoleUser,
+		Content: []llm.Content{{Type: llm.ContentTypeText, Text: "hello"}},
+	}
+	if err := db.AppendAgentMessage(thread.ID, msg); err != nil {
+		t.Fatalf("AppendAgentMessage: %v", err)
+	}
+
+	got, err := db.GetAgentThread(thread.ID)
+	if err != nil {
+		t.Fatalf("GetAgentThread: %v", err)
+	}
+	if len(got.Messages) != 1 {
+		t.Errorf("expected 1 message, got %d", len(got.Messages))
 	}
 }
 

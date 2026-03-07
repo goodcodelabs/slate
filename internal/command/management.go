@@ -80,6 +80,7 @@ func (c *ListJobsCommand) Execute(_ Context, params []string) (*Response, error)
 		Type        string `json:"type"`
 		WorkspaceID string `json:"workspace_id"`
 		PipelineID  string `json:"pipeline_id,omitempty"`
+		ThreadID    string `json:"thread_id,omitempty"`
 		Status      string `json:"status"`
 		CreatedAt   string `json:"created_at"`
 	}
@@ -95,6 +96,9 @@ func (c *ListJobsCommand) Execute(_ Context, params []string) (*Response, error)
 		}
 		if j.PipelineID != (ksuid.KSUID{}) {
 			s.PipelineID = j.PipelineID.String()
+		}
+		if j.ThreadID != (ksuid.KSUID{}) {
+			s.ThreadID = j.ThreadID.String()
 		}
 		summaries = append(summaries, s)
 	}

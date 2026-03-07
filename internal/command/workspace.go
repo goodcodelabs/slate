@@ -1,12 +1,9 @@
 package command
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 
-	"slate/internal/agent"
 	"slate/internal/data"
 
 	"github.com/segmentio/ksuid"
@@ -114,23 +111,3 @@ func (c *SetWorkspaceRouterCommand) Execute(_ Context, params []string) (*Respon
 	return &Response{Message: "ok"}, nil
 }
 
-// WorkspaceChatCommand handles: workspace_chat <workspace_id> <message>
-type WorkspaceChatCommand struct {
-	runner *agent.Runner
-}
-
-func (c *WorkspaceChatCommand) Execute(_ Context, params []string) (*Response, error) {
-	if len(params) < 2 {
-		return nil, fmt.Errorf("usage: workspace_chat <workspace_id> <message>")
-	}
-	wsID, err := ksuid.Parse(params[0])
-	if err != nil {
-		return nil, fmt.Errorf("invalid workspace_id: %w", err)
-	}
-	input := strings.Join(params[1:], " ")
-	result, err := c.runner.RunWorkspaceChat(context.Background(), wsID, input)
-	if err != nil {
-		return nil, err
-	}
-	return &Response{Message: result.Response}, nil
-}

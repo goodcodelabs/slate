@@ -29,10 +29,13 @@ const (
 	CmdAddTool              = "add_tool"
 	CmdRemoveTool           = "remove_tool"
 	CmdListTools            = "ls_tools"
-	CmdSetWorkspaceCatalog  = "set_workspace_catalog"
-	CmdSetWorkspaceRouter   = "set_workspace_router"
-	CmdWorkspaceChat        = "workspace_chat"
-	CmdListPipelines        = "ls_pipelines"
+	CmdNewAgentThread        = "new_agent_thread"
+	CmdAgentChat             = "agent_chat"
+	CmdListAgentThreads      = "ls_agent_threads"
+	CmdAgentThreadHistory    = "agent_thread_history"
+	CmdSetWorkspaceCatalog   = "set_workspace_catalog"
+	CmdSetWorkspaceRouter    = "set_workspace_router"
+	CmdListPipelines         = "ls_pipelines"
 	CmdCreatePipeline       = "create_pipeline"
 	CmdAddPipelineStep      = "add_pipeline_step"
 	CmdRunPipeline          = "run_pipeline"
@@ -80,17 +83,20 @@ func InitCommands(store *data.Data, runner *agent.Runner, sched *scheduler.Sched
 		CmdAddAgent:             {cmd: &AddAgentCommand{store: store}},
 		CmdSetAgentInstructions: {cmd: &SetAgentInstructionsCommand{store: store}},
 		CmdSetAgentModel:        {cmd: &SetAgentModelCommand{store: store}},
-		CmdRunAgent:             {cmd: &RunAgentCommand{runner: runner}},
+		CmdRunAgent:             {cmd: &RunAgentCommand{store: store, runner: runner, sched: sched}},
 		CmdNewThread:            {cmd: &NewThreadCommand{store: store}},
-		CmdChat:                 {cmd: &ChatCommand{runner: runner}},
+		CmdChat:                 {cmd: &ChatCommand{store: store, runner: runner, sched: sched}},
 		CmdListThreads:          {cmd: &ListThreadsCommand{store: store}},
 		CmdThreadHistory:        {cmd: &ThreadHistoryCommand{store: store}},
 		CmdAddTool:              {cmd: &AddToolCommand{store: store}},
 		CmdRemoveTool:           {cmd: &RemoveToolCommand{store: store}},
 		CmdListTools:            {cmd: &ListToolsCommand{store: store}},
+		CmdNewAgentThread:       {cmd: &NewAgentThreadCommand{store: store}},
+		CmdAgentChat:            {cmd: &AgentChatCommand{store: store, runner: runner, sched: sched}},
+		CmdListAgentThreads:     {cmd: &ListAgentThreadsCommand{store: store}},
+		CmdAgentThreadHistory:   {cmd: &AgentThreadHistoryCommand{store: store}},
 		CmdSetWorkspaceCatalog:  {cmd: &SetWorkspaceCatalogCommand{store: store}},
 		CmdSetWorkspaceRouter:   {cmd: &SetWorkspaceRouterCommand{store: store}},
-		CmdWorkspaceChat:        {cmd: &WorkspaceChatCommand{runner: runner}},
 		CmdListPipelines:        {cmd: &ListPipelinesCommand{store: store}},
 		CmdCreatePipeline:       {cmd: &CreatePipelineCommand{store: store}},
 		CmdAddPipelineStep:      {cmd: &AddPipelineStepCommand{store: store}},

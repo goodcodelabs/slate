@@ -32,6 +32,9 @@ func New(name, dataDir string) (*Data, error) {
 	if db.Pipelines == nil {
 		db.Pipelines = make(map[ksuid.KSUID]*Pipeline)
 	}
+	if db.AgentThreads == nil {
+		db.AgentThreads = make(map[ksuid.KSUID]*AgentThread)
+	}
 	// Jobs are always fresh — they are not persisted across restarts.
 	db.Jobs = make(map[ksuid.KSUID]*Job)
 
@@ -306,19 +309,15 @@ func (db *Data) RemoveAgentTool(agentID ksuid.KSUID, toolName string) error {
 	return nil
 }
 
-func (db *Data) NewThread(workspaceID, agentID ksuid.KSUID, name string) (*Thread, error) {
+func (db *Data) NewThread(workspaceID ksuid.KSUID, name string) (*Thread, error) {
 	if _, ok := db.Workspaces[workspaceID]; !ok {
 		return nil, errors.New("workspace not found")
-	}
-	if _, _, err := db.FindAgent(agentID); err != nil {
-		return nil, errors.New("agent not found")
 	}
 
 	now := time.Now().UTC()
 	t := &Thread{
 		ID:          ksuid.New(),
 		WorkspaceID: workspaceID,
-		AgentID:     agentID,
 		Name:        name,
 		State:       ThreadActive,
 		CreatedAt:   now,
@@ -383,6 +382,81 @@ func (db *Data) ListThreads(workspaceID ksuid.KSUID) ([]*Thread, error) {
 		}
 	}
 	return ts, nil
+}
+
+func (db *Data) NewAgentThread(agentID ksuid.KSUID, name string) (*AgentThread, error) {
+	if _, _, err := db.FindAgent(agentID); err != nil {
+		return nil, errors.New("agent not found")
+	}
+
+	now := time.Now().UTC()
+	t := &AgentThread{
+		ID:        ksuid.New(),
+		AgentID:   agentID,
+		Name:      name,
+		State:     ThreadActive,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	db.AgentThreads[t.ID] = t
+
+	if db.store != nil {
+		if err := db.store.SaveAgentThread(t); err != nil {
+			delete(db.AgentThreads, t.ID)
+			return nil, err
+		}
+	}
+
+	return t, nil
+}
+
+func (db *Data) GetAgentThread(id ksuid.KSUID) (*AgentThread, error) {
+	t, ok := db.AgentThreads[id]
+	if !ok {
+		return nil, errors.New("agent thread not found")
+	}
+	return t, nil
+}
+
+func (db *Data) DeleteAgentThread(id ksuid.KSUID) error {
+	if _, ok := db.AgentThreads[id]; !ok {
+		return errors.New("agent thread not found")
+	}
+
+	delete(db.AgentThreads, id)
+
+	if db.store != nil {
+		return db.store.DeleteAgentThread(id)
+	}
+	return nil
+}
+
+func (db *Data) ListAgentThreads(agentID ksuid.KSUID) ([]*AgentThread, error) {
+	if _, _, err := db.FindAgent(agentID); err != nil {
+		return nil, errors.New("agent not found")
+	}
+	var ts []*AgentThread
+	for _, t := range db.AgentThreads {
+		if t.AgentID == agentID {
+			ts = append(ts, t)
+		}
+	}
+	return ts, nil
+}
+
+func (db *Data) AppendAgentMessage(threadID ksuid.KSUID, msg llm.Message) error {
+	thread, ok := db.AgentThreads[threadID]
+	if !ok {
+		return errors.New("agent thread not found")
+	}
+
+	thread.Messages = append(thread.Messages, msg)
+
+	if db.store != nil {
+		return db.store.AppendAgentMessage(threadID, msg)
+	}
+	return nil
 }
 
 func (db *Data) GetWorkspace(id ksuid.KSUID) (*Workspace, error) {

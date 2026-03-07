@@ -85,6 +85,7 @@ func main() {
 	testWorkspaces(s)
 	testCatalogs(s)
 	testAgents(s)
+	testAgentThreads(s)
 	testJobs(s)
 	testManagement(s)
 	testExternalAgent(s)
@@ -226,6 +227,98 @@ func testAgents(s *suite) {
 	})
 	s.run("remove missing tool returns error", func() error {
 		return mustError(s.c.RemoveTool(agentID, "http_fetch"))
+	})
+}
+
+func testAgentThreads(s *suite) {
+	s.section("Agent Threads")
+
+	if err := s.c.AddCatalog("at-catalog"); err != nil {
+		fmt.Printf("  SKIP  (setup: add catalog failed: %v)\n", err)
+		return
+	}
+	defer func() { _ = s.c.DelCatalog("at-catalog") }()
+
+	catalogID := findCatalogID(s, "at-catalog")
+	if catalogID == "" {
+		fmt.Println("  SKIP  (setup: catalog ID not found)")
+		return
+	}
+
+	var agentID string
+	if !s.run("add agent for thread tests", func() error {
+		info, err := s.c.AddAgent(catalogID, "at-agent")
+		if err != nil {
+			return err
+		}
+		agentID = info.ID
+		return nil
+	}) {
+		fmt.Println("  SKIP  (remaining agent thread tests: no agent ID)")
+		return
+	}
+
+	var threadID string
+
+	s.run("create agent thread with name", func() error {
+		info, err := s.c.NewAgentThread(agentID, "my-thread")
+		if err != nil {
+			return err
+		}
+		if info.ID == "" {
+			return fmt.Errorf("empty thread ID")
+		}
+		if info.Name != "my-thread" {
+			return fmt.Errorf("name = %q, want %q", info.Name, "my-thread")
+		}
+		threadID = info.ID
+		return nil
+	})
+
+	s.run("create agent thread without name auto-generates one", func() error {
+		info, err := s.c.NewAgentThread(agentID, "")
+		if err != nil {
+			return err
+		}
+		if info.Name == "" {
+			return fmt.Errorf("expected auto-generated name, got empty string")
+		}
+		return nil
+	})
+
+	s.run("list agent threads returns created threads", func() error {
+		threads, err := s.c.ListAgentThreads(agentID)
+		if err != nil {
+			return err
+		}
+		if len(threads) < 2 {
+			return fmt.Errorf("expected at least 2 threads, got %d", len(threads))
+		}
+		return nil
+	})
+
+	if threadID != "" {
+		s.run("agent thread history is initially empty", func() error {
+			resp, err := s.c.AgentThreadHistory(threadID)
+			if err != nil {
+				return err
+			}
+			return mustContain(resp, "messages")
+		})
+	}
+
+	s.run("create agent thread with nonexistent agent returns error", func() error {
+		return mustError(func() error {
+			_, err := s.c.NewAgentThread("2cDKvMGSMqCjFpuSkNdRaR7EiSa", "bad")
+			return err
+		}())
+	})
+
+	s.run("list agent threads for nonexistent agent returns error", func() error {
+		return mustError(func() error {
+			_, err := s.c.ListAgentThreads("2cDKvMGSMqCjFpuSkNdRaR7EiSa")
+			return err
+		}())
 	})
 }
 
