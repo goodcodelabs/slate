@@ -12,7 +12,7 @@ import (
 	"slate/internal/llm"
 )
 
-const maxResponseBytes = 1 << 20 // 1 MB
+const maxResponseBytes = 20 * 1024 // 20 KB — keeps each fetch well under token budget
 
 // HTTPFetchTool fetches a URL and returns the response body.
 type HTTPFetchTool struct {
@@ -80,15 +80,26 @@ func (t *HTTPFetchTool) Execute(ctx context.Context, input json.RawMessage) (jso
 	}
 	defer resp.Body.Close()
 
-	limited := io.LimitReader(resp.Body, maxResponseBytes)
+	limited := io.LimitReader(resp.Body, maxResponseBytes+1)
 	bodyBytes, err := io.ReadAll(limited)
 	if err != nil {
 		return nil, fmt.Errorf("reading response: %w", err)
 	}
 
-	out, _ := json.Marshal(map[string]interface{}{
+	truncated := len(bodyBytes) > maxResponseBytes
+	if truncated {
+		bodyBytes = bodyBytes[:maxResponseBytes]
+	}
+
+	result := map[string]interface{}{
 		"status": resp.StatusCode,
 		"body":   string(bodyBytes),
-	})
+	}
+	if truncated {
+		result["truncated"] = true
+		result["note"] = fmt.Sprintf("response body was truncated to %d bytes", maxResponseBytes)
+	}
+
+	out, _ := json.Marshal(result)
 	return out, nil
 }

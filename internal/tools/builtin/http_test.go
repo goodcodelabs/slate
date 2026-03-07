@@ -115,6 +115,47 @@ func TestHTTPFetchTool_Execute_InvalidJSON(t *testing.T) {
 	}
 }
 
+func TestHTTPFetchTool_Execute_Truncated(t *testing.T) {
+	// Serve a body larger than the 20 KB cap.
+	bigBody := make([]byte, 25*1024)
+	for i := range bigBody {
+		bigBody[i] = 'x'
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(bigBody)
+	}))
+	defer srv.Close()
+
+	tool := builtin.NewHTTPFetchTool()
+	out, err := tool.Execute(context.Background(), json.RawMessage(`{"url":"`+srv.URL+`"}`))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	var result struct {
+		Status    int    `json:"status"`
+		Body      string `json:"body"`
+		Truncated bool   `json:"truncated"`
+		Note      string `json:"note"`
+	}
+	if err := json.Unmarshal(out, &result); err != nil {
+		t.Fatalf("parsing output: %v", err)
+	}
+	if result.Status != http.StatusOK {
+		t.Errorf("status = %d, want %d", result.Status, http.StatusOK)
+	}
+	if !result.Truncated {
+		t.Error("expected truncated=true for oversized response")
+	}
+	if result.Note == "" {
+		t.Error("expected note to be set when truncated")
+	}
+	if len(result.Body) != 20*1024 {
+		t.Errorf("body len = %d, want %d", len(result.Body), 20*1024)
+	}
+}
+
 func TestHTTPFetchTool_Execute_WithHeaders(t *testing.T) {
 	var receivedHeader string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

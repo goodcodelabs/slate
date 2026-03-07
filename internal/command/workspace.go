@@ -2,6 +2,7 @@ package command
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -10,6 +11,38 @@ import (
 
 	"github.com/segmentio/ksuid"
 )
+
+// ListWorkspacesCommand handles: ls_workspaces
+type ListWorkspacesCommand struct {
+	store *data.Data
+}
+
+func (c *ListWorkspacesCommand) Execute(_ Context, _ []string) (*Response, error) {
+	type workspaceSummary struct {
+		ID            string `json:"id"`
+		Name          string `json:"name"`
+		CatalogID     string `json:"catalog_id,omitempty"`
+		RouterAgentID string `json:"router_agent_id,omitempty"`
+	}
+
+	summaries := make([]workspaceSummary, 0, len(c.store.Workspaces))
+	for _, w := range c.store.Workspaces {
+		s := workspaceSummary{
+			ID:   w.ID.String(),
+			Name: w.Name,
+		}
+		if w.CatalogID != (ksuid.KSUID{}) {
+			s.CatalogID = w.CatalogID.String()
+		}
+		if w.Config != nil && w.Config.RouterAgentID != (ksuid.KSUID{}) {
+			s.RouterAgentID = w.Config.RouterAgentID.String()
+		}
+		summaries = append(summaries, s)
+	}
+
+	out, _ := json.Marshal(map[string]interface{}{"workspaces": summaries})
+	return &Response{Message: string(out)}, nil
+}
 
 type AddWorkspaceCommand struct {
 	store *data.Data

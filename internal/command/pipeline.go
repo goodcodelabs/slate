@@ -12,6 +12,47 @@ import (
 	"slate/internal/scheduler"
 )
 
+// ListPipelinesCommand handles: ls_pipelines <workspace_id>
+type ListPipelinesCommand struct {
+	store *data.Data
+}
+
+func (c *ListPipelinesCommand) Execute(_ Context, params []string) (*Response, error) {
+	if len(params) < 1 {
+		return nil, fmt.Errorf("usage: ls_pipelines <workspace_id>")
+	}
+	wsID, err := ksuid.Parse(params[0])
+	if err != nil {
+		return nil, fmt.Errorf("invalid workspace_id: %w", err)
+	}
+	pipelines, err := c.store.ListPipelines(wsID)
+	if err != nil {
+		return nil, err
+	}
+
+	type stepSummary struct {
+		AgentID string `json:"agent_id"`
+		Mode    string `json:"mode"`
+	}
+	type pipelineSummary struct {
+		ID   string        `json:"id"`
+		Name string        `json:"name"`
+		Steps []stepSummary `json:"steps"`
+	}
+
+	summaries := make([]pipelineSummary, 0, len(pipelines))
+	for _, p := range pipelines {
+		steps := make([]stepSummary, 0, len(p.Steps))
+		for _, s := range p.Steps {
+			steps = append(steps, stepSummary{AgentID: s.AgentID.String(), Mode: string(s.Mode)})
+		}
+		summaries = append(summaries, pipelineSummary{ID: p.ID.String(), Name: p.Name, Steps: steps})
+	}
+
+	out, _ := json.Marshal(map[string]interface{}{"pipelines": summaries})
+	return &Response{Message: string(out)}, nil
+}
+
 // CreatePipelineCommand handles: create_pipeline <workspace_id> <name>
 type CreatePipelineCommand struct {
 	store *data.Data

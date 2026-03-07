@@ -11,6 +11,7 @@ import (
 
 // Command names
 const (
+	CmdListWorkspaces       = "ls_workspaces"
 	CmdAddWorkspace         = "add_workspace"
 	CmdDelWorkspace         = "del_workspace"
 	CmdAddCatalog           = "add_catalog"
@@ -31,6 +32,7 @@ const (
 	CmdSetWorkspaceCatalog  = "set_workspace_catalog"
 	CmdSetWorkspaceRouter   = "set_workspace_router"
 	CmdWorkspaceChat        = "workspace_chat"
+	CmdListPipelines        = "ls_pipelines"
 	CmdCreatePipeline       = "create_pipeline"
 	CmdAddPipelineStep      = "add_pipeline_step"
 	CmdRunPipeline          = "run_pipeline"
@@ -68,6 +70,7 @@ func (p *ProtocolCommand) Execute(commandContext Context, params []string) (*Res
 
 func InitCommands(store *data.Data, runner *agent.Runner, sched *scheduler.Scheduler, met *metrics.Metrics) map[string]ProtocolCommand {
 	return map[string]ProtocolCommand{
+		CmdListWorkspaces:       {cmd: &ListWorkspacesCommand{store: store}},
 		CmdAddWorkspace:         {cmd: &AddWorkspaceCommand{store: store}},
 		CmdDelWorkspace:         {cmd: &RemoveWorkspaceCommand{store: store}},
 		CmdAddCatalog:           {cmd: &AddCatalogCommand{store: store}},
@@ -88,6 +91,7 @@ func InitCommands(store *data.Data, runner *agent.Runner, sched *scheduler.Sched
 		CmdSetWorkspaceCatalog:  {cmd: &SetWorkspaceCatalogCommand{store: store}},
 		CmdSetWorkspaceRouter:   {cmd: &SetWorkspaceRouterCommand{store: store}},
 		CmdWorkspaceChat:        {cmd: &WorkspaceChatCommand{runner: runner}},
+		CmdListPipelines:        {cmd: &ListPipelinesCommand{store: store}},
 		CmdCreatePipeline:       {cmd: &CreatePipelineCommand{store: store}},
 		CmdAddPipelineStep:      {cmd: &AddPipelineStepCommand{store: store}},
 		CmdRunPipeline:          {cmd: &RunPipelineCommand{store: store, runner: runner, sched: sched}},
