@@ -13,18 +13,18 @@ import (
 	"slate/internal/scheduler"
 )
 
-// NewThreadCommand handles: new_thread <workspace_id> [name...]
-type NewThreadCommand struct {
+// NewAgentThreadCommand handles: new_agent_thread <agent_id> [name...]
+type NewAgentThreadCommand struct {
 	store *data.Data
 }
 
-func (c *NewThreadCommand) Execute(_ Context, params []string) (*Response, error) {
+func (c *NewAgentThreadCommand) Execute(_ Context, params []string) (*Response, error) {
 	if len(params) < 1 {
-		return nil, fmt.Errorf("usage: new_thread <workspace_id> [name]")
+		return nil, fmt.Errorf("usage: new_agent_thread <agent_id> [name]")
 	}
-	workspaceID, err := ksuid.Parse(params[0])
+	agentID, err := ksuid.Parse(params[0])
 	if err != nil {
-		return nil, fmt.Errorf("invalid workspace_id: %w", err)
+		return nil, fmt.Errorf("invalid agent_id: %w", err)
 	}
 
 	name := strings.Join(params[1:], " ")
@@ -32,7 +32,7 @@ func (c *NewThreadCommand) Execute(_ Context, params []string) (*Response, error
 		name = fmt.Sprintf("thread-%s", time.Now().UTC().Format("20060102-150405"))
 	}
 
-	t, err := c.store.NewThread(workspaceID, name)
+	t, err := c.store.NewAgentThread(agentID, name)
 	if err != nil {
 		return nil, err
 	}
@@ -41,17 +41,17 @@ func (c *NewThreadCommand) Execute(_ Context, params []string) (*Response, error
 	return &Response{Message: string(out)}, nil
 }
 
-// ChatCommand handles: chat <thread_id> <message...>
+// AgentChatCommand handles: agent_chat <thread_id> <message...>
 // Returns a job_id immediately; poll job_status / job_result for the response.
-type ChatCommand struct {
+type AgentChatCommand struct {
 	store  *data.Data
 	runner *agent.Runner
 	sched  *scheduler.Scheduler
 }
 
-func (c *ChatCommand) Execute(_ Context, params []string) (*Response, error) {
+func (c *AgentChatCommand) Execute(_ Context, params []string) (*Response, error) {
 	if len(params) < 2 {
-		return nil, fmt.Errorf("usage: chat <thread_id> <message>")
+		return nil, fmt.Errorf("usage: agent_chat <thread_id> <message>")
 	}
 	threadID, err := ksuid.Parse(params[0])
 	if err != nil {
@@ -60,12 +60,11 @@ func (c *ChatCommand) Execute(_ Context, params []string) (*Response, error) {
 	input := strings.Join(params[1:], " ")
 
 	// Eagerly validate the thread exists so bad IDs fail before a job is created.
-	thread, err := c.store.GetThread(threadID)
-	if err != nil {
+	if _, err := c.store.GetAgentThread(threadID); err != nil {
 		return nil, err
 	}
 
-	job, err := c.store.CreateJob("thread_chat", thread.WorkspaceID, ksuid.KSUID{}, input)
+	job, err := c.store.CreateJob("agent_thread_chat", ksuid.KSUID{}, ksuid.KSUID{}, input)
 	if err != nil {
 		return nil, err
 	}
@@ -78,7 +77,7 @@ func (c *ChatCommand) Execute(_ Context, params []string) (*Response, error) {
 		Job: func() {
 			defer cancel()
 			_ = c.store.UpdateJob(job.ID, data.JobRunning, "", "")
-			result, runErr := c.runner.RunThread(jobCtx, threadID, input)
+			result, runErr := c.runner.RunAgentThread(jobCtx, threadID, input)
 			if runErr != nil {
 				_ = c.store.UpdateJob(job.ID, data.JobFailed, "", runErr.Error())
 			} else {
@@ -91,38 +90,40 @@ func (c *ChatCommand) Execute(_ Context, params []string) (*Response, error) {
 	return &Response{Message: string(out)}, nil
 }
 
-// ListThreadsCommand handles: ls_threads <workspace_id>
-type ListThreadsCommand struct {
+// ListAgentThreadsCommand handles: ls_agent_threads <agent_id>
+type ListAgentThreadsCommand struct {
 	store *data.Data
 }
 
-type threadSummary struct {
+type agentThreadSummary struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
+	AgentID   string `json:"agent_id"`
 	State     string `json:"state"`
 	Messages  int    `json:"messages"`
 	CreatedAt string `json:"created_at"`
 	UpdatedAt string `json:"updated_at"`
 }
 
-func (c *ListThreadsCommand) Execute(_ Context, params []string) (*Response, error) {
+func (c *ListAgentThreadsCommand) Execute(_ Context, params []string) (*Response, error) {
 	if len(params) < 1 {
-		return nil, fmt.Errorf("usage: ls_threads <workspace_id>")
+		return nil, fmt.Errorf("usage: ls_agent_threads <agent_id>")
 	}
-	workspaceID, err := ksuid.Parse(params[0])
+	agentID, err := ksuid.Parse(params[0])
 	if err != nil {
-		return nil, fmt.Errorf("invalid workspace_id: %w", err)
+		return nil, fmt.Errorf("invalid agent_id: %w", err)
 	}
-	threads, err := c.store.ListThreads(workspaceID)
+	threads, err := c.store.ListAgentThreads(agentID)
 	if err != nil {
 		return nil, err
 	}
 
-	summaries := make([]threadSummary, 0, len(threads))
+	summaries := make([]agentThreadSummary, 0, len(threads))
 	for _, t := range threads {
-		summaries = append(summaries, threadSummary{
+		summaries = append(summaries, agentThreadSummary{
 			ID:        t.ID.String(),
 			Name:      t.Name,
+			AgentID:   t.AgentID.String(),
 			State:     string(t.State),
 			Messages:  len(t.Messages),
 			CreatedAt: t.CreatedAt.Format(time.RFC3339),
@@ -134,20 +135,20 @@ func (c *ListThreadsCommand) Execute(_ Context, params []string) (*Response, err
 	return &Response{Message: string(out)}, nil
 }
 
-// ThreadHistoryCommand handles: thread_history <thread_id>
-type ThreadHistoryCommand struct {
+// AgentThreadHistoryCommand handles: agent_thread_history <thread_id>
+type AgentThreadHistoryCommand struct {
 	store *data.Data
 }
 
-func (c *ThreadHistoryCommand) Execute(_ Context, params []string) (*Response, error) {
+func (c *AgentThreadHistoryCommand) Execute(_ Context, params []string) (*Response, error) {
 	if len(params) < 1 {
-		return nil, fmt.Errorf("usage: thread_history <thread_id>")
+		return nil, fmt.Errorf("usage: agent_thread_history <thread_id>")
 	}
 	threadID, err := ksuid.Parse(params[0])
 	if err != nil {
 		return nil, fmt.Errorf("invalid thread_id: %w", err)
 	}
-	thread, err := c.store.GetThread(threadID)
+	thread, err := c.store.GetAgentThread(threadID)
 	if err != nil {
 		return nil, err
 	}
@@ -155,4 +156,3 @@ func (c *ThreadHistoryCommand) Execute(_ Context, params []string) (*Response, e
 	out, _ := json.Marshal(map[string]interface{}{"messages": thread.Messages})
 	return &Response{Message: string(out)}, nil
 }
-

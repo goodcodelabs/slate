@@ -58,30 +58,44 @@ func NewRunner(provider llm.Provider, store *data.Data, registry *tools.Registry
 	}
 }
 
-// RunThread executes an agent turn within a persistent Thread, persisting
-// both the user message and the assistant response to the thread's log.
+// RunThread executes a turn within a persistent Thread, routing through the
+// workspace's router agent with the full accumulated thread history as context.
+// Both the user message and the assistant response are persisted to the thread log.
 func (r *Runner) RunThread(ctx context.Context, threadID ksuid.KSUID, input string) (*RunResult, error) {
 	thread, err := r.store.GetThread(threadID)
 	if err != nil {
 		return nil, fmt.Errorf("loading thread: %w", err)
 	}
 
+	workspace, err := r.store.GetWorkspace(thread.WorkspaceID)
+	if err != nil {
+		return nil, fmt.Errorf("loading workspace: %w", err)
+	}
+	if workspace.Config == nil || workspace.Config.RouterAgentID == (ksuid.KSUID{}) {
+		return nil, fmt.Errorf("workspace has no router agent configured")
+	}
+
+	routerID := workspace.Config.RouterAgentID
+	suffix := buildCatalogListing(r, workspace)
+
 	start := time.Now()
 	r.emitEvent(events.Event{
 		WorkspaceID: thread.WorkspaceID.String(),
 		Type:        events.EventAgentRunStarted,
-		AgentID:     thread.AgentID.String(),
+		AgentID:     routerID.String(),
 		ThreadID:    threadID.String(),
 	})
 
 	historyLen := len(thread.Messages)
 
-	result, err := r.Run(ctx, thread.AgentID, input, thread.Messages)
+	result, err := r.RunWithOptions(ctx, routerID, input, thread.Messages, RunOptions{
+		SystemPromptSuffix: suffix,
+	})
 	if err != nil {
 		r.emitEvent(events.Event{
 			WorkspaceID: thread.WorkspaceID.String(),
 			Type:        events.EventAgentRunFailed,
-			AgentID:     thread.AgentID.String(),
+			AgentID:     routerID.String(),
 			ThreadID:    threadID.String(),
 			Error:       err.Error(),
 		})
@@ -91,7 +105,7 @@ func (r *Runner) RunThread(ctx context.Context, threadID ksuid.KSUID, input stri
 	r.emitEvent(events.Event{
 		WorkspaceID:  thread.WorkspaceID.String(),
 		Type:         events.EventAgentRunCompleted,
-		AgentID:      thread.AgentID.String(),
+		AgentID:      routerID.String(),
 		ThreadID:     threadID.String(),
 		LatencyMs:    time.Since(start).Milliseconds(),
 		InputTokens:  result.InputTokens,
@@ -102,6 +116,55 @@ func (r *Runner) RunThread(ctx context.Context, threadID ksuid.KSUID, input stri
 	newMessages := result.History[historyLen:]
 	for _, msg := range newMessages {
 		if err := r.store.AppendMessage(threadID, msg); err != nil {
+			return nil, fmt.Errorf("persisting message: %w", err)
+		}
+	}
+
+	return result, nil
+}
+
+// RunAgentThread executes a turn within a persistent AgentThread, routing directly to
+// the thread's bound agent with the full accumulated history as context.
+// Both the user message and the assistant response are persisted to the thread log.
+func (r *Runner) RunAgentThread(ctx context.Context, threadID ksuid.KSUID, input string) (*RunResult, error) {
+	thread, err := r.store.GetAgentThread(threadID)
+	if err != nil {
+		return nil, fmt.Errorf("loading agent thread: %w", err)
+	}
+
+	start := time.Now()
+	r.emitEvent(events.Event{
+		WorkspaceID: "", // agent threads are not workspace-scoped
+		Type:        events.EventAgentRunStarted,
+		AgentID:     thread.AgentID.String(),
+		ThreadID:    threadID.String(),
+	})
+
+	historyLen := len(thread.Messages)
+
+	result, err := r.Run(ctx, thread.AgentID, input, thread.Messages)
+	if err != nil {
+		r.emitEvent(events.Event{
+			Type:     events.EventAgentRunFailed,
+			AgentID:  thread.AgentID.String(),
+			ThreadID: threadID.String(),
+			Error:    err.Error(),
+		})
+		return nil, err
+	}
+
+	r.emitEvent(events.Event{
+		Type:         events.EventAgentRunCompleted,
+		AgentID:      thread.AgentID.String(),
+		ThreadID:     threadID.String(),
+		LatencyMs:    time.Since(start).Milliseconds(),
+		InputTokens:  result.InputTokens,
+		OutputTokens: result.OutputTokens,
+	})
+
+	newMessages := result.History[historyLen:]
+	for _, msg := range newMessages {
+		if err := r.store.AppendAgentMessage(threadID, msg); err != nil {
 			return nil, fmt.Errorf("persisting message: %w", err)
 		}
 	}

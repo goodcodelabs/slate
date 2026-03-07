@@ -9,12 +9,13 @@ import (
 )
 
 type Data struct {
-	Workspaces map[ksuid.KSUID]*Workspace `msgpack:"workspaces"`
-	Catalogs   map[ksuid.KSUID]*Catalog   `msgpack:"catalogs"`
-	Threads    map[ksuid.KSUID]*Thread    `msgpack:"-"`
-	Pipelines  map[ksuid.KSUID]*Pipeline  `msgpack:"-"`
-	Jobs       map[ksuid.KSUID]*Job       `msgpack:"-"`
-	store      Store                      `msgpack:"-"`
+	Workspaces   map[ksuid.KSUID]*Workspace    `msgpack:"workspaces"`
+	Catalogs     map[ksuid.KSUID]*Catalog      `msgpack:"catalogs"`
+	Threads      map[ksuid.KSUID]*Thread       `msgpack:"-"`
+	AgentThreads map[ksuid.KSUID]*AgentThread  `msgpack:"-"`
+	Pipelines    map[ksuid.KSUID]*Pipeline     `msgpack:"-"`
+	Jobs         map[ksuid.KSUID]*Job          `msgpack:"-"`
+	store        Store                         `msgpack:"-"`
 }
 
 type Metadata struct {
@@ -71,17 +72,32 @@ const (
 	ThreadError     ThreadState = "error"
 )
 
-// Thread is a persistent multi-turn conversation tied to a workspace and agent.
+// Thread is a persistent multi-turn conversation tied to a workspace.
+// Routing is handled by the workspace's router agent at chat time.
 // Metadata is stored in a msgpack snapshot; message history is stored in a
 // separate per-thread append log (see FileStore).
 type Thread struct {
 	ID          ksuid.KSUID `msgpack:"id"`
 	WorkspaceID ksuid.KSUID `msgpack:"workspace_id"`
-	AgentID     ksuid.KSUID `msgpack:"agent_id"`
 	Name        string      `msgpack:"name"`
 	State       ThreadState `msgpack:"state"`
 	CreatedAt   time.Time   `msgpack:"created_at"`
 	UpdatedAt   time.Time   `msgpack:"updated_at"`
+
+	// Messages are loaded from the per-thread log, not serialized in the snapshot.
+	Messages []llm.Message `msgpack:"-"`
+}
+
+// AgentThread is a persistent multi-turn conversation bound directly to a specific agent.
+// Unlike workspace threads, routing is always to the bound agent — no workspace router involved.
+// Metadata is stored in a msgpack snapshot; message history is stored in a separate log.
+type AgentThread struct {
+	ID        ksuid.KSUID   `msgpack:"id"`
+	AgentID   ksuid.KSUID   `msgpack:"agent_id"`
+	Name      string        `msgpack:"name"`
+	State     ThreadState   `msgpack:"state"`
+	CreatedAt time.Time     `msgpack:"created_at"`
+	UpdatedAt time.Time     `msgpack:"updated_at"`
 
 	// Messages are loaded from the per-thread log, not serialized in the snapshot.
 	Messages []llm.Message `msgpack:"-"`
@@ -138,13 +154,14 @@ const (
 	JobFailed    JobStatus = "failed"
 )
 
-// Job represents an asynchronous unit of work (e.g., a pipeline run).
+// Job represents an asynchronous unit of work (e.g., a pipeline run, a chat turn).
 // Jobs are ephemeral — they live in memory and are not reloaded after restart.
 type Job struct {
 	ID          ksuid.KSUID `msgpack:"id"`
 	Type        string      `msgpack:"type"`
 	WorkspaceID ksuid.KSUID `msgpack:"workspace_id"`
 	PipelineID  ksuid.KSUID `msgpack:"pipeline_id"`
+	ThreadID    ksuid.KSUID `msgpack:"thread_id"` // zero for non-thread jobs
 	Input       string      `msgpack:"input"`
 	Status      JobStatus   `msgpack:"status"`
 	Result      string      `msgpack:"result"`

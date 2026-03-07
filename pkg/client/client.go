@@ -151,9 +151,19 @@ func (c *Client) SetAgentModel(agentID, model string) error {
 	return err
 }
 
-// RunAgent executes a single-turn run against an agent.
+// RunAgent starts an async single-turn run against an agent and returns the job ID.
 func (c *Client) RunAgent(agentID, input string) (string, error) {
-	return c.send("run_agent", agentID, input)
+	resp, err := c.send("run_agent", agentID, input)
+	if err != nil {
+		return "", err
+	}
+	var out struct {
+		JobID string `json:"job_id"`
+	}
+	if err := json.Unmarshal([]byte(resp), &out); err != nil {
+		return "", fmt.Errorf("parsing response: %w", err)
+	}
+	return out.JobID, nil
 }
 
 // ---- Tool commands ----
@@ -187,10 +197,10 @@ func (c *Client) ListTools(agentID string) ([]string, error) {
 
 // ---- Thread commands ----
 
-// NewThread creates a thread inside a workspace for the given agent.
+// NewThread creates a thread inside a workspace.
 // Returns the new thread's ID.
-func (c *Client) NewThread(workspaceID, agentID string, name string) (ThreadInfo, error) {
-	args := []string{"new_thread", workspaceID, agentID}
+func (c *Client) NewThread(workspaceID string, name string) (ThreadInfo, error) {
+	args := []string{"new_thread", workspaceID}
 	if name != "" {
 		args = append(args, name)
 	}
@@ -205,9 +215,19 @@ func (c *Client) NewThread(workspaceID, agentID string, name string) (ThreadInfo
 	return info, nil
 }
 
-// Chat sends a message to a thread and returns the assistant's reply.
+// Chat sends a message to a thread and returns the job ID.
 func (c *Client) Chat(threadID, message string) (string, error) {
-	return c.send("chat", threadID, message)
+	resp, err := c.send("chat", threadID, message)
+	if err != nil {
+		return "", err
+	}
+	var out struct {
+		JobID string `json:"job_id"`
+	}
+	if err := json.Unmarshal([]byte(resp), &out); err != nil {
+		return "", fmt.Errorf("parsing response: %w", err)
+	}
+	return out.JobID, nil
 }
 
 // ListThreads returns all threads in a workspace.
@@ -225,6 +245,60 @@ func (c *Client) ListThreads(workspaceID string) ([]ThreadInfo, error) {
 	return out.Threads, nil
 }
 
+// ---- Agent thread commands ----
+
+// NewAgentThread creates a thread bound to a specific agent. Returns the new thread's ID.
+func (c *Client) NewAgentThread(agentID string, name string) (AgentThreadInfo, error) {
+	args := []string{"new_agent_thread", agentID}
+	if name != "" {
+		args = append(args, name)
+	}
+	resp, err := c.send(args...)
+	if err != nil {
+		return AgentThreadInfo{}, err
+	}
+	var info AgentThreadInfo
+	if err := json.Unmarshal([]byte(resp), &info); err != nil {
+		return AgentThreadInfo{}, fmt.Errorf("parsing response: %w", err)
+	}
+	return info, nil
+}
+
+// AgentChat sends a message to an agent thread and returns the job ID.
+func (c *Client) AgentChat(threadID, message string) (string, error) {
+	resp, err := c.send("agent_chat", threadID, message)
+	if err != nil {
+		return "", err
+	}
+	var out struct {
+		JobID string `json:"job_id"`
+	}
+	if err := json.Unmarshal([]byte(resp), &out); err != nil {
+		return "", fmt.Errorf("parsing response: %w", err)
+	}
+	return out.JobID, nil
+}
+
+// ListAgentThreads returns all threads for the given agent.
+func (c *Client) ListAgentThreads(agentID string) ([]AgentThreadInfo, error) {
+	resp, err := c.send("ls_agent_threads", agentID)
+	if err != nil {
+		return nil, err
+	}
+	var out struct {
+		Threads []AgentThreadInfo `json:"threads"`
+	}
+	if err := json.Unmarshal([]byte(resp), &out); err != nil {
+		return nil, fmt.Errorf("parsing response: %w", err)
+	}
+	return out.Threads, nil
+}
+
+// AgentThreadHistory returns the raw JSON message history for an agent thread.
+func (c *Client) AgentThreadHistory(threadID string) (string, error) {
+	return c.send("agent_thread_history", threadID)
+}
+
 // ---- Workspace routing commands ----
 
 // SetWorkspaceCatalog assigns a catalog to a workspace.
@@ -237,11 +311,6 @@ func (c *Client) SetWorkspaceCatalog(workspaceID, catalogID string) error {
 func (c *Client) SetWorkspaceRouter(workspaceID, agentID string) error {
 	_, err := c.send("set_workspace_router", workspaceID, agentID)
 	return err
-}
-
-// WorkspaceChat routes a message through the workspace's router agent.
-func (c *Client) WorkspaceChat(workspaceID, message string) (string, error) {
-	return c.send("workspace_chat", workspaceID, message)
 }
 
 // ---- Pipeline commands ----

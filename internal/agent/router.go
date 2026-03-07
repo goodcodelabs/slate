@@ -1,28 +1,15 @@
 package agent
 
 import (
-	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/segmentio/ksuid"
-	"slate/internal/events"
+	"slate/internal/data"
 )
 
-// RunWorkspaceChat routes a message through the workspace's designated router agent.
-// The router's system prompt is augmented with a list of catalog agents it can delegate to.
-func (r *Runner) RunWorkspaceChat(ctx context.Context, workspaceID ksuid.KSUID, input string) (*RunResult, error) {
-	workspace, err := r.store.GetWorkspace(workspaceID)
-	if err != nil {
-		return nil, fmt.Errorf("loading workspace: %w", err)
-	}
-
-	if workspace.Config == nil || workspace.Config.RouterAgentID == (ksuid.KSUID{}) {
-		return nil, fmt.Errorf("workspace has no router agent configured")
-	}
-
-	// Build a catalog listing so the router knows which agents it can call.
+// buildCatalogListing returns the catalog agent listing suffix for a workspace's system prompt.
+func buildCatalogListing(r *Runner, workspace *data.Workspace) string {
 	var sb strings.Builder
 	if workspace.CatalogID != (ksuid.KSUID{}) {
 		catalog, err := r.store.GetCatalog(workspace.CatalogID)
@@ -41,38 +28,6 @@ func (r *Runner) RunWorkspaceChat(ctx context.Context, workspaceID ksuid.KSUID, 
 			}
 		}
 	}
-
-	routerID := workspace.Config.RouterAgentID
-	wsStr := workspaceID.String()
-	start := time.Now()
-
-	r.emitEvent(events.Event{
-		WorkspaceID: wsStr,
-		Type:        events.EventAgentRunStarted,
-		AgentID:     routerID.String(),
-	})
-
-	result, err := r.RunWithOptions(ctx, routerID, input, nil, RunOptions{
-		SystemPromptSuffix: sb.String(),
-	})
-	if err != nil {
-		r.emitEvent(events.Event{
-			WorkspaceID: wsStr,
-			Type:        events.EventAgentRunFailed,
-			AgentID:     routerID.String(),
-			Error:       err.Error(),
-		})
-		return nil, err
-	}
-
-	r.emitEvent(events.Event{
-		WorkspaceID:  wsStr,
-		Type:         events.EventAgentRunCompleted,
-		AgentID:      routerID.String(),
-		LatencyMs:    time.Since(start).Milliseconds(),
-		InputTokens:  result.InputTokens,
-		OutputTokens: result.OutputTokens,
-	})
-
-	return result, nil
+	return sb.String()
 }
+

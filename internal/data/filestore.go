@@ -15,13 +15,14 @@ import (
 )
 
 const (
-	workspacesDir = "snapshots/workspaces"
-	catalogsDir   = "snapshots/catalogs"
-	threadsDir    = "snapshots/threads"
-	pipelinesDir  = "snapshots/pipelines"
-	walDir        = "wal"
-	walFile       = "operations.log"
-	metadataFile  = "metadata.json"
+	workspacesDir   = "snapshots/workspaces"
+	catalogsDir     = "snapshots/catalogs"
+	threadsDir      = "snapshots/threads"
+	agentThreadsDir = "snapshots/agent_threads"
+	pipelinesDir    = "snapshots/pipelines"
+	walDir          = "wal"
+	walFile         = "operations.log"
+	metadataFile    = "metadata.json"
 )
 
 // Metadata tracks database version and checkpoint information
@@ -78,6 +79,7 @@ func (fs *FileStore) initDirectories() error {
 		filepath.Join(fs.baseDir, workspacesDir),
 		filepath.Join(fs.baseDir, catalogsDir),
 		filepath.Join(fs.baseDir, threadsDir),
+		filepath.Join(fs.baseDir, agentThreadsDir),
 		filepath.Join(fs.baseDir, pipelinesDir),
 		filepath.Join(fs.baseDir, walDir),
 	}
@@ -133,10 +135,11 @@ func (fs *FileStore) Load() (*Data, error) {
 	defer fs.mu.Unlock()
 
 	data := &Data{
-		Workspaces: make(map[ksuid.KSUID]*Workspace),
-		Catalogs:   make(map[ksuid.KSUID]*Catalog),
-		Threads:    make(map[ksuid.KSUID]*Thread),
-		Pipelines:  make(map[ksuid.KSUID]*Pipeline),
+		Workspaces:   make(map[ksuid.KSUID]*Workspace),
+		Catalogs:     make(map[ksuid.KSUID]*Catalog),
+		Threads:      make(map[ksuid.KSUID]*Thread),
+		AgentThreads: make(map[ksuid.KSUID]*AgentThread),
+		Pipelines:    make(map[ksuid.KSUID]*Pipeline),
 	}
 
 	// Load workspace snapshots
@@ -154,6 +157,11 @@ func (fs *FileStore) Load() (*Data, error) {
 		return nil, fmt.Errorf("failed to load threads: %w", err)
 	}
 
+	// Load agent thread metadata snapshots
+	if err := fs.loadAgentThreadSnapshots(data); err != nil {
+		return nil, fmt.Errorf("failed to load agent threads: %w", err)
+	}
+
 	// Load pipeline snapshots
 	if err := fs.loadPipelineSnapshots(data); err != nil {
 		return nil, fmt.Errorf("failed to load pipelines: %w", err)
@@ -167,6 +175,11 @@ func (fs *FileStore) Load() (*Data, error) {
 	// Load message logs for all threads (after WAL replay so the thread set is final)
 	if err := fs.loadThreadMessages(data); err != nil {
 		return nil, fmt.Errorf("failed to load thread messages: %w", err)
+	}
+
+	// Load message logs for all agent threads
+	if err := fs.loadAgentThreadMessages(data); err != nil {
+		return nil, fmt.Errorf("failed to load agent thread messages: %w", err)
 	}
 
 	return data, nil
@@ -535,6 +548,135 @@ func (fs *FileStore) AppendMessage(threadID ksuid.KSUID, msg llm.Message) error 
 
 	if err := file.Sync(); err != nil {
 		return fmt.Errorf("failed to sync message log: %w", err)
+	}
+
+	return nil
+}
+
+// loadAgentThreadSnapshots loads agent thread metadata from snapshot files (no messages).
+func (fs *FileStore) loadAgentThreadSnapshots(data *Data) error {
+	dir := filepath.Join(fs.baseDir, agentThreadsDir)
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return fmt.Errorf("failed to read agent_threads directory: %w", err)
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".msgpack" {
+			continue
+		}
+
+		path := filepath.Join(dir, entry.Name())
+		fileData, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("failed to read agent thread file %s: %w", entry.Name(), err)
+		}
+
+		var thread AgentThread
+		if err := msgpack.Unmarshal(fileData, &thread); err != nil {
+			return fmt.Errorf("failed to unmarshal agent thread %s: %w", entry.Name(), err)
+		}
+
+		data.AgentThreads[thread.ID] = &thread
+	}
+
+	return nil
+}
+
+// loadAgentThreadMessages reads message logs for every agent thread in data.AgentThreads.
+// Called after WAL replay so the thread set is final.
+func (fs *FileStore) loadAgentThreadMessages(data *Data) error {
+	for id, thread := range data.AgentThreads {
+		logPath := filepath.Join(fs.baseDir, agentThreadsDir, fmt.Sprintf("%s.log", id.String()))
+		msgs, err := fs.readMessageLog(logPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue // no messages yet
+			}
+			return fmt.Errorf("failed to load messages for agent thread %s: %w", id, err)
+		}
+		thread.Messages = msgs
+	}
+	return nil
+}
+
+// SaveAgentThread persists agent thread metadata to WAL + snapshot file.
+// Message history is not included (stored separately in the message log).
+func (fs *FileStore) SaveAgentThread(t *AgentThread) error {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	data, err := msgpack.Marshal(t)
+	if err != nil {
+		return fmt.Errorf("failed to marshal agent thread: %w", err)
+	}
+
+	if err := fs.wal.Append(OpAddAgentThread, t.ID, data); err != nil {
+		return fmt.Errorf("failed to append to WAL: %w", err)
+	}
+
+	path := filepath.Join(fs.baseDir, agentThreadsDir, fmt.Sprintf("%s.msgpack", t.ID.String()))
+	if err := atomicWriteFile(path, data); err != nil {
+		return fmt.Errorf("failed to write agent thread snapshot: %w", err)
+	}
+
+	fs.opCount++
+	if fs.opCount >= uint64(fs.metadata.CheckpointInterval) {
+		if err := fs.checkpointInternal(); err != nil {
+			fmt.Printf("Warning: checkpoint failed: %v\n", err)
+		}
+	}
+
+	return nil
+}
+
+// DeleteAgentThread removes an agent thread's snapshot and message log.
+func (fs *FileStore) DeleteAgentThread(id ksuid.KSUID) error {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	if err := fs.wal.Append(OpRemoveAgentThread, id, nil); err != nil {
+		return fmt.Errorf("failed to append to WAL: %w", err)
+	}
+
+	snapshotPath := filepath.Join(fs.baseDir, agentThreadsDir, fmt.Sprintf("%s.msgpack", id.String()))
+	if err := os.Remove(snapshotPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to remove agent thread snapshot: %w", err)
+	}
+
+	logPath := filepath.Join(fs.baseDir, agentThreadsDir, fmt.Sprintf("%s.log", id.String()))
+	if err := os.Remove(logPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to remove agent thread message log: %w", err)
+	}
+
+	fs.opCount++
+	return nil
+}
+
+// AppendAgentMessage appends a message to an agent thread's JSON-line message log.
+func (fs *FileStore) AppendAgentMessage(threadID ksuid.KSUID, msg llm.Message) error {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("failed to marshal message: %w", err)
+	}
+
+	logPath := filepath.Join(fs.baseDir, agentThreadsDir, fmt.Sprintf("%s.log", threadID.String()))
+	file, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to open agent message log: %w", err)
+	}
+	defer file.Close()
+
+	if _, err := file.Write(append(data, '\n')); err != nil {
+		return fmt.Errorf("failed to write message: %w", err)
+	}
+
+	if err := file.Sync(); err != nil {
+		return fmt.Errorf("failed to sync agent message log: %w", err)
 	}
 
 	return nil
