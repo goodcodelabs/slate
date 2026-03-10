@@ -13,10 +13,12 @@ import (
 	"slate/pkg/client"
 )
 
-// fakeServer is a minimal test server that handles Slate protocol commands.
+// fakeServer is a minimal test server that handles the Slate JSON protocol.
 type fakeServer struct {
 	listener net.Listener
-	handlers map[string]func(params []string) string
+	// handlers map cmd → func(params json.RawMessage) (data string, err string)
+	// data is the raw JSON to embed in "data"; err is non-empty for error responses.
+	handlers map[string]func(params json.RawMessage) (string, string)
 }
 
 func newFakeServer(t *testing.T) *fakeServer {
@@ -28,22 +30,24 @@ func newFakeServer(t *testing.T) *fakeServer {
 
 	srv := &fakeServer{
 		listener: ln,
-		handlers: make(map[string]func(params []string) string),
+		handlers: make(map[string]func(params json.RawMessage) (string, string)),
 	}
 
+	okHandler := func(_ json.RawMessage) (string, string) { return "", "" }
+
 	// Default handlers.
-	srv.handlers["health"] = func(_ []string) string { return "ok" }
-	srv.handlers["add_workspace"] = func(_ []string) string { return "ok" }
-	srv.handlers["del_workspace"] = func(_ []string) string { return "ok" }
-	srv.handlers["add_catalog"] = func(_ []string) string { return "ok" }
-	srv.handlers["del_catalog"] = func(_ []string) string { return "ok" }
-	srv.handlers["ls_catalogs"] = func(_ []string) string {
+	srv.handlers["health"] = okHandler
+	srv.handlers["add_workspace"] = okHandler
+	srv.handlers["del_workspace"] = okHandler
+	srv.handlers["add_catalog"] = okHandler
+	srv.handlers["del_catalog"] = okHandler
+	srv.handlers["ls_catalogs"] = func(_ json.RawMessage) (string, string) {
 		out, _ := json.Marshal(map[string]interface{}{
 			"catalogs": []map[string]string{
 				{"id": "cat1", "name": "test-cat"},
 			},
 		})
-		return string(out)
+		return string(out), ""
 	}
 
 	go srv.serve()
@@ -74,21 +78,33 @@ func (srv *fakeServer) handleConn(conn net.Conn) {
 			return
 		}
 		line = strings.TrimRight(line, "\r\n")
-		parts := strings.SplitN(line, " ", 2)
-		cmd := strings.ToLower(parts[0])
-		var params []string
-		if len(parts) > 1 {
-			params = strings.Split(parts[1], " ")
+
+		var req struct {
+			Cmd    string          `json:"cmd"`
+			Params json.RawMessage `json:"params"`
 		}
+		if err := json.Unmarshal([]byte(line), &req); err != nil {
+			out, _ := json.Marshal(map[string]interface{}{"ok": false, "error": "invalid JSON"})
+			conn.Write(append(out, '\n'))
+			continue
+		}
+		cmd := strings.ToLower(req.Cmd)
 
 		handler, ok := srv.handlers[cmd]
-		var resp string
-		if ok {
-			resp = handler(params)
+		var resp []byte
+		if !ok {
+			resp, _ = json.Marshal(map[string]interface{}{"ok": false, "error": fmt.Sprintf("unknown command: %s", cmd)})
 		} else {
-			resp = fmt.Sprintf("error|unknown command: %s", cmd)
+			data, errMsg := handler(req.Params)
+			if errMsg != "" {
+				resp, _ = json.Marshal(map[string]interface{}{"ok": false, "error": errMsg})
+			} else if data == "" {
+				resp, _ = json.Marshal(map[string]interface{}{"ok": true})
+			} else {
+				resp = []byte(fmt.Sprintf(`{"ok":true,"data":%s}`, data))
+			}
 		}
-		conn.Write([]byte(resp + "\n"))
+		conn.Write(append(resp, '\n'))
 	}
 }
 
@@ -102,12 +118,8 @@ func TestClient_Health(t *testing.T) {
 	}
 	defer c.Close()
 
-	resp, err := c.Health()
-	if err != nil {
+	if err := c.Health(); err != nil {
 		t.Fatalf("Health: %v", err)
-	}
-	if resp != "ok" {
-		t.Errorf("Health = %q, want %q", resp, "ok")
 	}
 }
 
@@ -172,9 +184,9 @@ func TestClient_ListCatalogs(t *testing.T) {
 
 func TestClient_ErrorResponse(t *testing.T) {
 	srv := newFakeServer(t)
-	// Register an error-returning handler.
-	srv.handlers["add_workspace"] = func(_ []string) string {
-		return "error|workspace already exists"
+	// Override handler to return an error.
+	srv.handlers["add_workspace"] = func(_ json.RawMessage) (string, string) {
+		return "", "workspace already exists"
 	}
 
 	c, err := client.Dial(srv.Addr())
@@ -216,15 +228,16 @@ func TestAgentSession_Run(t *testing.T) {
 
 		reader := bufio.NewReader(conn)
 
-		// Read the register_agent command.
+		// Read the register_agent command (JSON envelope).
 		line, err := reader.ReadString('\n')
 		if err != nil {
 			return
 		}
 		_ = line // consume register_agent line
 
-		// Send agent_id response.
-		resp, _ := json.Marshal(map[string]string{"agent_id": "test-agent-id-123"})
+		// Send {"ok":true,"data":{"agent_id":"test-agent-id-123"}} response.
+		data, _ := json.Marshal(map[string]string{"agent_id": "test-agent-id-123"})
+		resp, _ := json.Marshal(map[string]interface{}{"ok": true, "data": json.RawMessage(data)})
 		conn.Write(append(resp, '\n'))
 
 		// Send a run request to the agent.

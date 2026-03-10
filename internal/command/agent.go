@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 
 	"github.com/segmentio/ksuid"
 	"slate/internal/agent"
@@ -12,20 +11,27 @@ import (
 	"slate/internal/scheduler"
 )
 
-// AddAgentCommand handles: add_agent <catalog_id> <name>
+// AddAgentCommand handles: add_agent
 type AddAgentCommand struct {
 	store *data.Data
 }
 
-func (c *AddAgentCommand) Execute(_ Context, params []string) (*Response, error) {
-	if len(params) < 2 {
-		return nil, fmt.Errorf("usage: add_agent <catalog_id> <name>")
+func (c *AddAgentCommand) Execute(_ Context, params json.RawMessage) (*Response, error) {
+	var p struct {
+		CatalogID string `json:"catalog_id"`
+		Name      string `json:"name"`
 	}
-	catalogID, err := ksuid.Parse(params[0])
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	catalogID, err := ksuid.Parse(p.CatalogID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid catalog_id: %w", err)
 	}
-	a, err := c.store.AddAgent(catalogID, params[1])
+	if p.Name == "" {
+		return nil, fmt.Errorf("name is required")
+	}
+	a, err := c.store.AddAgent(catalogID, p.Name)
 	if err != nil {
 		return nil, err
 	}
@@ -33,46 +39,78 @@ func (c *AddAgentCommand) Execute(_ Context, params []string) (*Response, error)
 	return &Response{Message: string(out)}, nil
 }
 
-// SetAgentInstructionsCommand handles: set_agent_instructions <agent_id> <instructions...>
+// DelAgentCommand handles: del_agent
+type DelAgentCommand struct {
+	store *data.Data
+}
+
+func (c *DelAgentCommand) Execute(_ Context, params json.RawMessage) (*Response, error) {
+	var p struct {
+		AgentID string `json:"agent_id"`
+	}
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	agentID, err := ksuid.Parse(p.AgentID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid agent_id: %w", err)
+	}
+	if err := c.store.RemoveAgent(agentID); err != nil {
+		return nil, err
+	}
+	return &Response{Message: "ok"}, nil
+}
+
+// SetAgentInstructionsCommand handles: set_agent_instructions
 type SetAgentInstructionsCommand struct {
 	store *data.Data
 }
 
-func (c *SetAgentInstructionsCommand) Execute(_ Context, params []string) (*Response, error) {
-	if len(params) < 2 {
-		return nil, fmt.Errorf("usage: set_agent_instructions <agent_id> <instructions>")
+func (c *SetAgentInstructionsCommand) Execute(_ Context, params json.RawMessage) (*Response, error) {
+	var p struct {
+		AgentID      string `json:"agent_id"`
+		Instructions string `json:"instructions"`
 	}
-	agentID, err := ksuid.Parse(params[0])
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	agentID, err := ksuid.Parse(p.AgentID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid agent_id: %w", err)
 	}
-	instructions := strings.Join(params[1:], " ")
-	if err := c.store.SetAgentInstructions(agentID, instructions); err != nil {
+	if err := c.store.SetAgentInstructions(agentID, p.Instructions); err != nil {
 		return nil, err
 	}
 	return &Response{Message: "ok"}, nil
 }
 
-// SetAgentModelCommand handles: set_agent_model <agent_id> <model>
+// SetAgentModelCommand handles: set_agent_model
 type SetAgentModelCommand struct {
 	store *data.Data
 }
 
-func (c *SetAgentModelCommand) Execute(_ Context, params []string) (*Response, error) {
-	if len(params) < 2 {
-		return nil, fmt.Errorf("usage: set_agent_model <agent_id> <model>")
+func (c *SetAgentModelCommand) Execute(_ Context, params json.RawMessage) (*Response, error) {
+	var p struct {
+		AgentID string `json:"agent_id"`
+		Model   string `json:"model"`
 	}
-	agentID, err := ksuid.Parse(params[0])
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	agentID, err := ksuid.Parse(p.AgentID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid agent_id: %w", err)
 	}
-	if err := c.store.SetAgentModel(agentID, params[1]); err != nil {
+	if p.Model == "" {
+		return nil, fmt.Errorf("model is required")
+	}
+	if err := c.store.SetAgentModel(agentID, p.Model); err != nil {
 		return nil, err
 	}
 	return &Response{Message: "ok"}, nil
 }
 
-// RunAgentCommand handles: run_agent <agent_id> <input...>
+// RunAgentCommand handles: run_agent
 // Returns a job_id immediately; poll job_status / job_result for the response.
 type RunAgentCommand struct {
 	store  *data.Data
@@ -80,22 +118,28 @@ type RunAgentCommand struct {
 	sched  *scheduler.Scheduler
 }
 
-func (c *RunAgentCommand) Execute(_ Context, params []string) (*Response, error) {
-	if len(params) < 2 {
-		return nil, fmt.Errorf("usage: run_agent <agent_id> <input>")
+func (c *RunAgentCommand) Execute(_ Context, params json.RawMessage) (*Response, error) {
+	var p struct {
+		AgentID string `json:"agent_id"`
+		Input   string `json:"input"`
 	}
-	agentID, err := ksuid.Parse(params[0])
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	agentID, err := ksuid.Parse(p.AgentID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid agent_id: %w", err)
 	}
-	input := strings.Join(params[1:], " ")
+	if p.Input == "" {
+		return nil, fmt.Errorf("input is required")
+	}
 
 	// Eagerly validate the agent exists so bad IDs fail before a job is created.
 	if _, _, err := c.store.FindAgent(agentID); err != nil {
 		return nil, fmt.Errorf("agent not found")
 	}
 
-	job, err := c.store.CreateJob("agent_run", ksuid.KSUID{}, ksuid.KSUID{}, input)
+	job, err := c.store.CreateJob("agent_run", ksuid.KSUID{}, ksuid.KSUID{}, p.Input)
 	if err != nil {
 		return nil, err
 	}
@@ -107,7 +151,7 @@ func (c *RunAgentCommand) Execute(_ Context, params []string) (*Response, error)
 		Job: func() {
 			defer cancel()
 			_ = c.store.UpdateJob(job.ID, data.JobRunning, "", "")
-			result, runErr := c.runner.Run(jobCtx, agentID, input, nil)
+			result, runErr := c.runner.Run(jobCtx, agentID, p.Input, nil)
 			if runErr != nil {
 				_ = c.store.UpdateJob(job.ID, data.JobFailed, "", runErr.Error())
 			} else {

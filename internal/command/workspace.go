@@ -14,7 +14,7 @@ type ListWorkspacesCommand struct {
 	store *data.Data
 }
 
-func (c *ListWorkspacesCommand) Execute(_ Context, _ []string) (*Response, error) {
+func (c *ListWorkspacesCommand) Execute(_ Context, _ json.RawMessage) (*Response, error) {
 	type workspaceSummary struct {
 		ID            string `json:"id"`
 		Name          string `json:"name"`
@@ -22,12 +22,10 @@ func (c *ListWorkspacesCommand) Execute(_ Context, _ []string) (*Response, error
 		RouterAgentID string `json:"router_agent_id,omitempty"`
 	}
 
-	summaries := make([]workspaceSummary, 0, len(c.store.Workspaces))
-	for _, w := range c.store.Workspaces {
-		s := workspaceSummary{
-			ID:   w.ID.String(),
-			Name: w.Name,
-		}
+	workspaces := c.store.ListWorkspaces()
+	summaries := make([]workspaceSummary, 0, len(workspaces))
+	for _, w := range workspaces {
+		s := workspaceSummary{ID: w.ID.String(), Name: w.Name}
 		if w.CatalogID != (ksuid.KSUID{}) {
 			s.CatalogID = w.CatalogID.String()
 		}
@@ -45,9 +43,14 @@ type AddWorkspaceCommand struct {
 	store *data.Data
 }
 
-func (c *AddWorkspaceCommand) Execute(_ Context, params []string) (*Response, error) {
-	err := c.store.AddWorkspace(params[0])
-	if err != nil {
+func (c *AddWorkspaceCommand) Execute(_ Context, params json.RawMessage) (*Response, error) {
+	var p struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(params, &p); err != nil || p.Name == "" {
+		return nil, fmt.Errorf("params must include non-empty \"name\"")
+	}
+	if err := c.store.AddWorkspace(p.Name); err != nil {
 		return nil, err
 	}
 	return &Response{Message: "ok"}, nil
@@ -57,28 +60,37 @@ type RemoveWorkspaceCommand struct {
 	store *data.Data
 }
 
-func (c *RemoveWorkspaceCommand) Execute(_ Context, params []string) (*Response, error) {
-	err := c.store.RemoveWorkspace(params[0])
-	if err != nil {
+func (c *RemoveWorkspaceCommand) Execute(_ Context, params json.RawMessage) (*Response, error) {
+	var p struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(params, &p); err != nil || p.Name == "" {
+		return nil, fmt.Errorf("params must include non-empty \"name\"")
+	}
+	if err := c.store.RemoveWorkspace(p.Name); err != nil {
 		return nil, err
 	}
 	return &Response{Message: "ok"}, nil
 }
 
-// SetWorkspaceCatalogCommand handles: set_workspace_catalog <workspace_id> <catalog_id>
+// SetWorkspaceCatalogCommand handles: set_workspace_catalog
 type SetWorkspaceCatalogCommand struct {
 	store *data.Data
 }
 
-func (c *SetWorkspaceCatalogCommand) Execute(_ Context, params []string) (*Response, error) {
-	if len(params) < 2 {
-		return nil, fmt.Errorf("usage: set_workspace_catalog <workspace_id> <catalog_id>")
+func (c *SetWorkspaceCatalogCommand) Execute(_ Context, params json.RawMessage) (*Response, error) {
+	var p struct {
+		WorkspaceID string `json:"workspace_id"`
+		CatalogID   string `json:"catalog_id"`
 	}
-	wsID, err := ksuid.Parse(params[0])
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	wsID, err := ksuid.Parse(p.WorkspaceID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid workspace_id: %w", err)
 	}
-	catID, err := ksuid.Parse(params[1])
+	catID, err := ksuid.Parse(p.CatalogID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid catalog_id: %w", err)
 	}
@@ -88,20 +100,24 @@ func (c *SetWorkspaceCatalogCommand) Execute(_ Context, params []string) (*Respo
 	return &Response{Message: "ok"}, nil
 }
 
-// SetWorkspaceRouterCommand handles: set_workspace_router <workspace_id> <agent_id>
+// SetWorkspaceRouterCommand handles: set_workspace_router
 type SetWorkspaceRouterCommand struct {
 	store *data.Data
 }
 
-func (c *SetWorkspaceRouterCommand) Execute(_ Context, params []string) (*Response, error) {
-	if len(params) < 2 {
-		return nil, fmt.Errorf("usage: set_workspace_router <workspace_id> <agent_id>")
+func (c *SetWorkspaceRouterCommand) Execute(_ Context, params json.RawMessage) (*Response, error) {
+	var p struct {
+		WorkspaceID string `json:"workspace_id"`
+		AgentID     string `json:"agent_id"`
 	}
-	wsID, err := ksuid.Parse(params[0])
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	wsID, err := ksuid.Parse(p.WorkspaceID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid workspace_id: %w", err)
 	}
-	agentID, err := ksuid.Parse(params[1])
+	agentID, err := ksuid.Parse(p.AgentID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid agent_id: %w", err)
 	}
@@ -110,4 +126,3 @@ func (c *SetWorkspaceRouterCommand) Execute(_ Context, params []string) (*Respon
 	}
 	return &Response{Message: "ok"}, nil
 }
-

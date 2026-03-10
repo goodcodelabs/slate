@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/segmentio/ksuid"
@@ -13,35 +12,36 @@ import (
 	"slate/internal/scheduler"
 )
 
-// NewThreadCommand handles: new_thread <workspace_id> [name...]
+// NewThreadCommand handles: new_thread
 type NewThreadCommand struct {
 	store *data.Data
 }
 
-func (c *NewThreadCommand) Execute(_ Context, params []string) (*Response, error) {
-	if len(params) < 1 {
-		return nil, fmt.Errorf("usage: new_thread <workspace_id> [name]")
+func (c *NewThreadCommand) Execute(_ Context, params json.RawMessage) (*Response, error) {
+	var p struct {
+		WorkspaceID string `json:"workspace_id"`
+		Name        string `json:"name"`
 	}
-	workspaceID, err := ksuid.Parse(params[0])
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	workspaceID, err := ksuid.Parse(p.WorkspaceID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid workspace_id: %w", err)
 	}
-
-	name := strings.Join(params[1:], " ")
+	name := p.Name
 	if name == "" {
 		name = fmt.Sprintf("thread-%s", time.Now().UTC().Format("20060102-150405"))
 	}
-
 	t, err := c.store.NewThread(workspaceID, name)
 	if err != nil {
 		return nil, err
 	}
-
 	out, _ := json.Marshal(map[string]string{"id": t.ID.String(), "name": t.Name})
 	return &Response{Message: string(out)}, nil
 }
 
-// ChatCommand handles: chat <thread_id> <message...>
+// ChatCommand handles: chat
 // Returns a job_id immediately; poll job_status / job_result for the response.
 type ChatCommand struct {
 	store  *data.Data
@@ -49,23 +49,28 @@ type ChatCommand struct {
 	sched  *scheduler.Scheduler
 }
 
-func (c *ChatCommand) Execute(_ Context, params []string) (*Response, error) {
-	if len(params) < 2 {
-		return nil, fmt.Errorf("usage: chat <thread_id> <message>")
+func (c *ChatCommand) Execute(_ Context, params json.RawMessage) (*Response, error) {
+	var p struct {
+		ThreadID string `json:"thread_id"`
+		Message  string `json:"message"`
 	}
-	threadID, err := ksuid.Parse(params[0])
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	threadID, err := ksuid.Parse(p.ThreadID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid thread_id: %w", err)
 	}
-	input := strings.Join(params[1:], " ")
+	if p.Message == "" {
+		return nil, fmt.Errorf("message is required")
+	}
 
-	// Eagerly validate the thread exists so bad IDs fail before a job is created.
 	thread, err := c.store.GetThread(threadID)
 	if err != nil {
 		return nil, err
 	}
 
-	job, err := c.store.CreateJob("thread_chat", thread.WorkspaceID, ksuid.KSUID{}, input)
+	job, err := c.store.CreateJob("thread_chat", thread.WorkspaceID, ksuid.KSUID{}, p.Message)
 	if err != nil {
 		return nil, err
 	}
@@ -78,7 +83,7 @@ func (c *ChatCommand) Execute(_ Context, params []string) (*Response, error) {
 		Job: func() {
 			defer cancel()
 			_ = c.store.UpdateJob(job.ID, data.JobRunning, "", "")
-			result, runErr := c.runner.RunThread(jobCtx, threadID, input)
+			result, runErr := c.runner.RunThread(jobCtx, threadID, p.Message)
 			if runErr != nil {
 				_ = c.store.UpdateJob(job.ID, data.JobFailed, "", runErr.Error())
 			} else {
@@ -91,7 +96,7 @@ func (c *ChatCommand) Execute(_ Context, params []string) (*Response, error) {
 	return &Response{Message: string(out)}, nil
 }
 
-// ListThreadsCommand handles: ls_threads <workspace_id>
+// ListThreadsCommand handles: ls_threads
 type ListThreadsCommand struct {
 	store *data.Data
 }
@@ -105,11 +110,14 @@ type threadSummary struct {
 	UpdatedAt string `json:"updated_at"`
 }
 
-func (c *ListThreadsCommand) Execute(_ Context, params []string) (*Response, error) {
-	if len(params) < 1 {
-		return nil, fmt.Errorf("usage: ls_threads <workspace_id>")
+func (c *ListThreadsCommand) Execute(_ Context, params json.RawMessage) (*Response, error) {
+	var p struct {
+		WorkspaceID string `json:"workspace_id"`
 	}
-	workspaceID, err := ksuid.Parse(params[0])
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	workspaceID, err := ksuid.Parse(p.WorkspaceID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid workspace_id: %w", err)
 	}
@@ -134,16 +142,19 @@ func (c *ListThreadsCommand) Execute(_ Context, params []string) (*Response, err
 	return &Response{Message: string(out)}, nil
 }
 
-// ThreadHistoryCommand handles: thread_history <thread_id>
+// ThreadHistoryCommand handles: thread_history
 type ThreadHistoryCommand struct {
 	store *data.Data
 }
 
-func (c *ThreadHistoryCommand) Execute(_ Context, params []string) (*Response, error) {
-	if len(params) < 1 {
-		return nil, fmt.Errorf("usage: thread_history <thread_id>")
+func (c *ThreadHistoryCommand) Execute(_ Context, params json.RawMessage) (*Response, error) {
+	var p struct {
+		ThreadID string `json:"thread_id"`
 	}
-	threadID, err := ksuid.Parse(params[0])
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	threadID, err := ksuid.Parse(p.ThreadID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid thread_id: %w", err)
 	}
@@ -151,8 +162,6 @@ func (c *ThreadHistoryCommand) Execute(_ Context, params []string) (*Response, e
 	if err != nil {
 		return nil, err
 	}
-
 	out, _ := json.Marshal(map[string]interface{}{"messages": thread.Messages})
 	return &Response{Message: string(out)}, nil
 }
-

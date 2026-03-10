@@ -1,22 +1,23 @@
 // Package client provides a Go client for the Slate agent orchestration server.
 //
-// The wire protocol is line-oriented: each request is a space-separated list of
-// tokens followed by a newline; the server replies with a single line. Error
-// responses are prefixed with "error|".
+// The wire protocol is newline-delimited JSON:
+//
+//   Request:  {"cmd":"...", "params":{...}}\n
+//   Response: {"ok":true,"data":{...}}\n  or  {"ok":false,"error":"..."}\n
 //
 // # Basic usage
 //
-//	c, err := client.Dial("localhost:6379")
+//	c, err := client.Dial("localhost:4242")
 //	if err != nil { ... }
 //	defer c.Close()
 //
-//	wsID, err := c.AddWorkspace("my-workspace")
+//	err = c.AddWorkspace("my-workspace")
 //
 // # External agent registration
 //
 // An external process can register itself as an agent using AgentSession:
 //
-//	sess, err := client.DialAgentSession("localhost:6379", catalogID, "my-agent", "You are helpful.")
+//	sess, err := client.DialAgentSession("localhost:4242", catalogID, "my-agent", "You are helpful.")
 //	if err != nil { ... }
 //	sess.Run(ctx, func(ctx context.Context, input string) string {
 //	    return "hello from external agent: " + input
@@ -58,40 +59,51 @@ func (c *Client) Close() error {
 	return c.conn.Close()
 }
 
-// send writes a command line and reads the server's single-line response.
-// It returns an error if the response begins with "error|".
-func (c *Client) send(args ...string) (string, error) {
+// send writes a JSON command and reads the server's JSON response.
+// It returns the raw "data" field on success, or an error if ok=false.
+func (c *Client) send(cmd string, params interface{}) (json.RawMessage, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	line := strings.Join(args, " ") + "\n"
-	if _, err := c.conn.Write([]byte(line)); err != nil {
-		return "", fmt.Errorf("write: %w", err)
+	req, err := json.Marshal(map[string]interface{}{"cmd": cmd, "params": params})
+	if err != nil {
+		return nil, fmt.Errorf("marshal request: %w", err)
+	}
+	if _, err := c.conn.Write(append(req, '\n')); err != nil {
+		return nil, fmt.Errorf("write: %w", err)
 	}
 
 	resp, err := c.reader.ReadString('\n')
 	if err != nil {
-		return "", fmt.Errorf("read: %w", err)
+		return nil, fmt.Errorf("read: %w", err)
 	}
 	resp = strings.TrimRight(resp, "\r\n")
 
-	if strings.HasPrefix(resp, "error|") {
-		return "", fmt.Errorf("%s", strings.TrimPrefix(resp, "error|"))
+	var envelope struct {
+		OK    bool            `json:"ok"`
+		Data  json.RawMessage `json:"data"`
+		Error string          `json:"error"`
 	}
-	return resp, nil
+	if err := json.Unmarshal([]byte(resp), &envelope); err != nil {
+		return nil, fmt.Errorf("parsing response: %w", err)
+	}
+	if !envelope.OK {
+		return nil, fmt.Errorf("%s", envelope.Error)
+	}
+	return envelope.Data, nil
 }
 
 // ---- Workspace commands ----
 
 // AddWorkspace creates a workspace with the given name.
 func (c *Client) AddWorkspace(name string) error {
-	_, err := c.send("add_workspace", name)
+	_, err := c.send("add_workspace", map[string]string{"name": name})
 	return err
 }
 
 // DelWorkspace removes the named workspace.
 func (c *Client) DelWorkspace(name string) error {
-	_, err := c.send("del_workspace", name)
+	_, err := c.send("del_workspace", map[string]string{"name": name})
 	return err
 }
 
@@ -99,26 +111,26 @@ func (c *Client) DelWorkspace(name string) error {
 
 // AddCatalog creates a catalog with the given name.
 func (c *Client) AddCatalog(name string) error {
-	_, err := c.send("add_catalog", name)
+	_, err := c.send("add_catalog", map[string]string{"name": name})
 	return err
 }
 
 // DelCatalog removes the named catalog.
 func (c *Client) DelCatalog(name string) error {
-	_, err := c.send("del_catalog", name)
+	_, err := c.send("del_catalog", map[string]string{"name": name})
 	return err
 }
 
 // ListCatalogs returns all catalogs.
 func (c *Client) ListCatalogs() ([]CatalogInfo, error) {
-	resp, err := c.send("ls_catalogs")
+	data, err := c.send("ls_catalogs", map[string]string{})
 	if err != nil {
 		return nil, err
 	}
 	var out struct {
 		Catalogs []CatalogInfo `json:"catalogs"`
 	}
-	if err := json.Unmarshal([]byte(resp), &out); err != nil {
+	if err := json.Unmarshal(data, &out); err != nil {
 		return nil, fmt.Errorf("parsing response: %w", err)
 	}
 	return out.Catalogs, nil
@@ -128,39 +140,45 @@ func (c *Client) ListCatalogs() ([]CatalogInfo, error) {
 
 // AddAgent creates an agent in the given catalog. Returns the new agent's ID.
 func (c *Client) AddAgent(catalogID, name string) (AgentInfo, error) {
-	resp, err := c.send("add_agent", catalogID, name)
+	data, err := c.send("add_agent", map[string]string{"catalog_id": catalogID, "name": name})
 	if err != nil {
 		return AgentInfo{}, err
 	}
 	var info AgentInfo
-	if err := json.Unmarshal([]byte(resp), &info); err != nil {
+	if err := json.Unmarshal(data, &info); err != nil {
 		return AgentInfo{}, fmt.Errorf("parsing response: %w", err)
 	}
 	return info, nil
 }
 
+// DelAgent removes an agent by ID.
+func (c *Client) DelAgent(agentID string) error {
+	_, err := c.send("del_agent", map[string]string{"agent_id": agentID})
+	return err
+}
+
 // SetAgentInstructions sets the system prompt for an agent.
 func (c *Client) SetAgentInstructions(agentID, instructions string) error {
-	_, err := c.send("set_agent_instructions", agentID, instructions)
+	_, err := c.send("set_agent_instructions", map[string]string{"agent_id": agentID, "instructions": instructions})
 	return err
 }
 
 // SetAgentModel sets the LLM model for an agent.
 func (c *Client) SetAgentModel(agentID, model string) error {
-	_, err := c.send("set_agent_model", agentID, model)
+	_, err := c.send("set_agent_model", map[string]string{"agent_id": agentID, "model": model})
 	return err
 }
 
 // RunAgent starts an async single-turn run against an agent and returns the job ID.
 func (c *Client) RunAgent(agentID, input string) (string, error) {
-	resp, err := c.send("run_agent", agentID, input)
+	data, err := c.send("run_agent", map[string]string{"agent_id": agentID, "input": input})
 	if err != nil {
 		return "", err
 	}
 	var out struct {
 		JobID string `json:"job_id"`
 	}
-	if err := json.Unmarshal([]byte(resp), &out); err != nil {
+	if err := json.Unmarshal(data, &out); err != nil {
 		return "", fmt.Errorf("parsing response: %w", err)
 	}
 	return out.JobID, nil
@@ -170,26 +188,26 @@ func (c *Client) RunAgent(agentID, input string) (string, error) {
 
 // AddTool attaches a tool to an agent.
 func (c *Client) AddTool(agentID, toolName string) error {
-	_, err := c.send("add_tool", agentID, toolName)
+	_, err := c.send("add_tool", map[string]string{"agent_id": agentID, "tool": toolName})
 	return err
 }
 
 // RemoveTool detaches a tool from an agent.
 func (c *Client) RemoveTool(agentID, toolName string) error {
-	_, err := c.send("remove_tool", agentID, toolName)
+	_, err := c.send("remove_tool", map[string]string{"agent_id": agentID, "tool": toolName})
 	return err
 }
 
 // ListTools returns the tools attached to an agent.
 func (c *Client) ListTools(agentID string) ([]string, error) {
-	resp, err := c.send("ls_tools", agentID)
+	data, err := c.send("ls_tools", map[string]string{"agent_id": agentID})
 	if err != nil {
 		return nil, err
 	}
 	var out struct {
 		Tools []string `json:"tools"`
 	}
-	if err := json.Unmarshal([]byte(resp), &out); err != nil {
+	if err := json.Unmarshal(data, &out); err != nil {
 		return nil, fmt.Errorf("parsing response: %w", err)
 	}
 	return out.Tools, nil
@@ -197,19 +215,14 @@ func (c *Client) ListTools(agentID string) ([]string, error) {
 
 // ---- Thread commands ----
 
-// NewThread creates a thread inside a workspace.
-// Returns the new thread's ID.
-func (c *Client) NewThread(workspaceID string, name string) (ThreadInfo, error) {
-	args := []string{"new_thread", workspaceID}
-	if name != "" {
-		args = append(args, name)
-	}
-	resp, err := c.send(args...)
+// NewThread creates a thread inside a workspace. Returns the new thread's ID.
+func (c *Client) NewThread(workspaceID, name string) (ThreadInfo, error) {
+	data, err := c.send("new_thread", map[string]string{"workspace_id": workspaceID, "name": name})
 	if err != nil {
 		return ThreadInfo{}, err
 	}
 	var info ThreadInfo
-	if err := json.Unmarshal([]byte(resp), &info); err != nil {
+	if err := json.Unmarshal(data, &info); err != nil {
 		return ThreadInfo{}, fmt.Errorf("parsing response: %w", err)
 	}
 	return info, nil
@@ -217,14 +230,14 @@ func (c *Client) NewThread(workspaceID string, name string) (ThreadInfo, error) 
 
 // Chat sends a message to a thread and returns the job ID.
 func (c *Client) Chat(threadID, message string) (string, error) {
-	resp, err := c.send("chat", threadID, message)
+	data, err := c.send("chat", map[string]string{"thread_id": threadID, "message": message})
 	if err != nil {
 		return "", err
 	}
 	var out struct {
 		JobID string `json:"job_id"`
 	}
-	if err := json.Unmarshal([]byte(resp), &out); err != nil {
+	if err := json.Unmarshal(data, &out); err != nil {
 		return "", fmt.Errorf("parsing response: %w", err)
 	}
 	return out.JobID, nil
@@ -232,14 +245,14 @@ func (c *Client) Chat(threadID, message string) (string, error) {
 
 // ListThreads returns all threads in a workspace.
 func (c *Client) ListThreads(workspaceID string) ([]ThreadInfo, error) {
-	resp, err := c.send("ls_threads", workspaceID)
+	data, err := c.send("ls_threads", map[string]string{"workspace_id": workspaceID})
 	if err != nil {
 		return nil, err
 	}
 	var out struct {
 		Threads []ThreadInfo `json:"threads"`
 	}
-	if err := json.Unmarshal([]byte(resp), &out); err != nil {
+	if err := json.Unmarshal(data, &out); err != nil {
 		return nil, fmt.Errorf("parsing response: %w", err)
 	}
 	return out.Threads, nil
@@ -248,17 +261,13 @@ func (c *Client) ListThreads(workspaceID string) ([]ThreadInfo, error) {
 // ---- Agent thread commands ----
 
 // NewAgentThread creates a thread bound to a specific agent. Returns the new thread's ID.
-func (c *Client) NewAgentThread(agentID string, name string) (AgentThreadInfo, error) {
-	args := []string{"new_agent_thread", agentID}
-	if name != "" {
-		args = append(args, name)
-	}
-	resp, err := c.send(args...)
+func (c *Client) NewAgentThread(agentID, name string) (AgentThreadInfo, error) {
+	data, err := c.send("new_agent_thread", map[string]string{"agent_id": agentID, "name": name})
 	if err != nil {
 		return AgentThreadInfo{}, err
 	}
 	var info AgentThreadInfo
-	if err := json.Unmarshal([]byte(resp), &info); err != nil {
+	if err := json.Unmarshal(data, &info); err != nil {
 		return AgentThreadInfo{}, fmt.Errorf("parsing response: %w", err)
 	}
 	return info, nil
@@ -266,14 +275,14 @@ func (c *Client) NewAgentThread(agentID string, name string) (AgentThreadInfo, e
 
 // AgentChat sends a message to an agent thread and returns the job ID.
 func (c *Client) AgentChat(threadID, message string) (string, error) {
-	resp, err := c.send("agent_chat", threadID, message)
+	data, err := c.send("agent_chat", map[string]string{"thread_id": threadID, "message": message})
 	if err != nil {
 		return "", err
 	}
 	var out struct {
 		JobID string `json:"job_id"`
 	}
-	if err := json.Unmarshal([]byte(resp), &out); err != nil {
+	if err := json.Unmarshal(data, &out); err != nil {
 		return "", fmt.Errorf("parsing response: %w", err)
 	}
 	return out.JobID, nil
@@ -281,35 +290,35 @@ func (c *Client) AgentChat(threadID, message string) (string, error) {
 
 // ListAgentThreads returns all threads for the given agent.
 func (c *Client) ListAgentThreads(agentID string) ([]AgentThreadInfo, error) {
-	resp, err := c.send("ls_agent_threads", agentID)
+	data, err := c.send("ls_agent_threads", map[string]string{"agent_id": agentID})
 	if err != nil {
 		return nil, err
 	}
 	var out struct {
 		Threads []AgentThreadInfo `json:"threads"`
 	}
-	if err := json.Unmarshal([]byte(resp), &out); err != nil {
+	if err := json.Unmarshal(data, &out); err != nil {
 		return nil, fmt.Errorf("parsing response: %w", err)
 	}
 	return out.Threads, nil
 }
 
 // AgentThreadHistory returns the raw JSON message history for an agent thread.
-func (c *Client) AgentThreadHistory(threadID string) (string, error) {
-	return c.send("agent_thread_history", threadID)
+func (c *Client) AgentThreadHistory(threadID string) (json.RawMessage, error) {
+	return c.send("agent_thread_history", map[string]string{"thread_id": threadID})
 }
 
 // ---- Workspace routing commands ----
 
 // SetWorkspaceCatalog assigns a catalog to a workspace.
 func (c *Client) SetWorkspaceCatalog(workspaceID, catalogID string) error {
-	_, err := c.send("set_workspace_catalog", workspaceID, catalogID)
+	_, err := c.send("set_workspace_catalog", map[string]string{"workspace_id": workspaceID, "catalog_id": catalogID})
 	return err
 }
 
 // SetWorkspaceRouter designates an agent as the workspace's router.
 func (c *Client) SetWorkspaceRouter(workspaceID, agentID string) error {
-	_, err := c.send("set_workspace_router", workspaceID, agentID)
+	_, err := c.send("set_workspace_router", map[string]string{"workspace_id": workspaceID, "agent_id": agentID})
 	return err
 }
 
@@ -317,34 +326,33 @@ func (c *Client) SetWorkspaceRouter(workspaceID, agentID string) error {
 
 // CreatePipeline creates a named pipeline in a workspace. Returns the pipeline ID.
 func (c *Client) CreatePipeline(workspaceID, name string) (PipelineInfo, error) {
-	resp, err := c.send("create_pipeline", workspaceID, name)
+	data, err := c.send("create_pipeline", map[string]string{"workspace_id": workspaceID, "name": name})
 	if err != nil {
 		return PipelineInfo{}, err
 	}
 	var info PipelineInfo
-	if err := json.Unmarshal([]byte(resp), &info); err != nil {
+	if err := json.Unmarshal(data, &info); err != nil {
 		return PipelineInfo{}, fmt.Errorf("parsing response: %w", err)
 	}
 	return info, nil
 }
 
-// AddPipelineStep appends an agent step to a pipeline.
-// mode is "sequential" or "parallel".
+// AddPipelineStep appends an agent step to a pipeline. mode is "sequential" or "parallel".
 func (c *Client) AddPipelineStep(pipelineID, agentID, mode string) error {
-	_, err := c.send("add_pipeline_step", pipelineID, agentID, mode)
+	_, err := c.send("add_pipeline_step", map[string]string{"pipeline_id": pipelineID, "agent_id": agentID, "mode": mode})
 	return err
 }
 
 // RunPipeline starts an async pipeline job and returns the job ID.
 func (c *Client) RunPipeline(pipelineID, input string) (string, error) {
-	resp, err := c.send("run_pipeline", pipelineID, input)
+	data, err := c.send("run_pipeline", map[string]string{"pipeline_id": pipelineID, "input": input})
 	if err != nil {
 		return "", err
 	}
 	var out struct {
 		JobID string `json:"job_id"`
 	}
-	if err := json.Unmarshal([]byte(resp), &out); err != nil {
+	if err := json.Unmarshal(data, &out); err != nil {
 		return "", fmt.Errorf("parsing response: %w", err)
 	}
 	return out.JobID, nil
@@ -354,12 +362,12 @@ func (c *Client) RunPipeline(pipelineID, input string) (string, error) {
 
 // JobStatus returns the current status of a job.
 func (c *Client) JobStatus(jobID string) (JobStatus, error) {
-	resp, err := c.send("job_status", jobID)
+	data, err := c.send("job_status", map[string]string{"job_id": jobID})
 	if err != nil {
 		return JobStatus{}, err
 	}
 	var status JobStatus
-	if err := json.Unmarshal([]byte(resp), &status); err != nil {
+	if err := json.Unmarshal(data, &status); err != nil {
 		return JobStatus{}, fmt.Errorf("parsing response: %w", err)
 	}
 	return status, nil
@@ -367,12 +375,25 @@ func (c *Client) JobStatus(jobID string) (JobStatus, error) {
 
 // JobResult returns the result of a completed job.
 func (c *Client) JobResult(jobID string) (JobResult, error) {
-	resp, err := c.send("job_result", jobID)
+	data, err := c.send("job_result", map[string]string{"job_id": jobID})
 	if err != nil {
 		return JobResult{}, err
 	}
 	var result JobResult
-	if err := json.Unmarshal([]byte(resp), &result); err != nil {
+	if err := json.Unmarshal(data, &result); err != nil {
+		return JobResult{}, fmt.Errorf("parsing response: %w", err)
+	}
+	return result, nil
+}
+
+// WaitJob blocks until the job reaches a terminal state and returns the result.
+func (c *Client) WaitJob(jobID string) (JobResult, error) {
+	data, err := c.send("wait_job", map[string]string{"job_id": jobID})
+	if err != nil {
+		return JobResult{}, err
+	}
+	var result JobResult
+	if err := json.Unmarshal(data, &result); err != nil {
 		return JobResult{}, fmt.Errorf("parsing response: %w", err)
 	}
 	return result, nil
@@ -380,16 +401,12 @@ func (c *Client) JobResult(jobID string) (JobResult, error) {
 
 // ListJobs returns all jobs, optionally filtered by workspaceID (pass "" for all).
 func (c *Client) ListJobs(workspaceID string) ([]JobInfo, error) {
-	args := []string{"ls_jobs"}
-	if workspaceID != "" {
-		args = append(args, workspaceID)
-	}
-	resp, err := c.send(args...)
+	data, err := c.send("ls_jobs", map[string]string{"workspace_id": workspaceID})
 	if err != nil {
 		return nil, err
 	}
 	var jobs []JobInfo
-	if err := json.Unmarshal([]byte(resp), &jobs); err != nil {
+	if err := json.Unmarshal(data, &jobs); err != nil {
 		return nil, fmt.Errorf("parsing response: %w", err)
 	}
 	return jobs, nil
@@ -397,31 +414,31 @@ func (c *Client) ListJobs(workspaceID string) ([]JobInfo, error) {
 
 // CancelJob cancels a running job.
 func (c *Client) CancelJob(jobID string) error {
-	_, err := c.send("cancel_job", jobID)
+	_, err := c.send("cancel_job", map[string]string{"job_id": jobID})
 	return err
 }
 
 // ---- Management commands ----
 
 // Health checks the server health.
-func (c *Client) Health() (string, error) {
-	return c.send("health")
+func (c *Client) Health() error {
+	_, err := c.send("health", map[string]string{})
+	return err
 }
 
-// SystemMetrics returns server metrics as a raw JSON string.
-func (c *Client) SystemMetrics() (string, error) {
-	return c.send("system_metrics")
+// SystemMetrics returns server metrics.
+func (c *Client) SystemMetrics() (json.RawMessage, error) {
+	return c.send("system_metrics", map[string]string{})
 }
 
-// SystemStats returns combined server stats as a raw JSON string.
-func (c *Client) SystemStats() (string, error) {
-	return c.send("system_stats")
+// SystemStats returns combined server stats.
+func (c *Client) SystemStats() (json.RawMessage, error) {
+	return c.send("system_stats", map[string]string{})
 }
 
 // ---- AgentSession — external agent registration ----
 
 // AgentSession represents a connection that has been registered as an external agent.
-// The server will call back through this connection when the agent needs to run.
 type AgentSession struct {
 	agentID string
 	conn    net.Conn
@@ -438,14 +455,21 @@ func DialAgentSession(addr, catalogID, name, instructions string) (*AgentSession
 
 	reader := bufio.NewReader(conn)
 
-	// Send registration command.
-	line := strings.Join([]string{"register_agent", catalogID, name, instructions}, " ") + "\n"
-	if _, err := conn.Write([]byte(line)); err != nil {
+	// Send registration command as JSON.
+	req, _ := json.Marshal(map[string]interface{}{
+		"cmd": "register_agent",
+		"params": map[string]string{
+			"catalog_id":   catalogID,
+			"name":         name,
+			"instructions": instructions,
+		},
+	})
+	if _, err := conn.Write(append(req, '\n')); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("sending register_agent: %w", err)
 	}
 
-	// Read the {"agent_id": "..."} response.
+	// Read the {"ok":true,"data":{"agent_id":"..."}} response.
 	resp, err := reader.ReadString('\n')
 	if err != nil {
 		conn.Close()
@@ -453,17 +477,26 @@ func DialAgentSession(addr, catalogID, name, instructions string) (*AgentSession
 	}
 	resp = strings.TrimRight(resp, "\r\n")
 
-	if strings.HasPrefix(resp, "error|") {
+	var envelope struct {
+		OK    bool            `json:"ok"`
+		Data  json.RawMessage `json:"data"`
+		Error string          `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(resp), &envelope); err != nil {
 		conn.Close()
-		return nil, fmt.Errorf("registration failed: %s", strings.TrimPrefix(resp, "error|"))
+		return nil, fmt.Errorf("parsing registration response: %w", err)
+	}
+	if !envelope.OK {
+		conn.Close()
+		return nil, fmt.Errorf("registration failed: %s", envelope.Error)
 	}
 
 	var out struct {
 		AgentID string `json:"agent_id"`
 	}
-	if err := json.Unmarshal([]byte(resp), &out); err != nil {
+	if err := json.Unmarshal(envelope.Data, &out); err != nil {
 		conn.Close()
-		return nil, fmt.Errorf("parsing registration response: %w", err)
+		return nil, fmt.Errorf("parsing agent_id: %w", err)
 	}
 
 	return &AgentSession{
@@ -484,7 +517,6 @@ func (s *AgentSession) Close() error {
 }
 
 // HandlerFunc is called by Run for each incoming request from the orchestrator.
-// The return value is sent back as the agent's response.
 type HandlerFunc func(ctx context.Context, input string) string
 
 // Run enters the agent receive loop, calling handler for each request from the
@@ -512,7 +544,6 @@ func (s *AgentSession) Run(ctx context.Context, handler HandlerFunc) error {
 
 			var req serverRequest
 			if err := json.Unmarshal([]byte(line), &req); err != nil {
-				// Unexpected message format — skip.
 				continue
 			}
 

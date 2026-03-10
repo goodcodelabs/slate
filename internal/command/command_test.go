@@ -29,13 +29,24 @@ func commands(store *data.Data) map[string]command.ProtocolCommand {
 	return command.InitCommands(store, nil, nil, nil)
 }
 
-func exec(t *testing.T, cmds map[string]command.ProtocolCommand, name string, params ...string) (*command.Response, error) {
+// exec runs a named command with the given params (marshaled to JSON).
+func exec(t *testing.T, cmds map[string]command.ProtocolCommand, name string, params interface{}) (*command.Response, error) {
 	t.Helper()
 	cmd, ok := cmds[name]
 	if !ok {
 		t.Fatalf("command %q not found", name)
 	}
-	return cmd.Execute(command.Context{}, params)
+	var raw json.RawMessage
+	if params == nil {
+		raw = json.RawMessage("{}")
+	} else {
+		var err error
+		raw, err = json.Marshal(params)
+		if err != nil {
+			t.Fatalf("marshal params: %v", err)
+		}
+	}
+	return cmd.Execute(command.Context{}, raw)
 }
 
 // ---- Health tests ----
@@ -44,7 +55,7 @@ func TestHealthCommand_ReturnsOk(t *testing.T) {
 	store := newTestStore(t)
 	cmds := commands(store)
 
-	resp, err := exec(t, cmds, command.CmdHealth)
+	resp, err := exec(t, cmds, command.CmdHealth, nil)
 	if err != nil {
 		t.Fatalf("health: %v", err)
 	}
@@ -59,7 +70,7 @@ func TestAddWorkspaceCommand_Success(t *testing.T) {
 	store := newTestStore(t)
 	cmds := commands(store)
 
-	resp, err := exec(t, cmds, command.CmdAddWorkspace, "my-workspace")
+	resp, err := exec(t, cmds, command.CmdAddWorkspace, map[string]string{"name": "my-workspace"})
 	if err != nil {
 		t.Fatalf("add_workspace: %v", err)
 	}
@@ -72,8 +83,8 @@ func TestAddWorkspaceCommand_Duplicate(t *testing.T) {
 	store := newTestStore(t)
 	cmds := commands(store)
 
-	_, _ = exec(t, cmds, command.CmdAddWorkspace, "dup-ws")
-	_, err := exec(t, cmds, command.CmdAddWorkspace, "dup-ws")
+	_, _ = exec(t, cmds, command.CmdAddWorkspace, map[string]string{"name": "dup-ws"})
+	_, err := exec(t, cmds, command.CmdAddWorkspace, map[string]string{"name": "dup-ws"})
 	if err == nil {
 		t.Fatal("expected error for duplicate workspace name, got nil")
 	}
@@ -83,8 +94,8 @@ func TestRemoveWorkspaceCommand_Success(t *testing.T) {
 	store := newTestStore(t)
 	cmds := commands(store)
 
-	_, _ = exec(t, cmds, command.CmdAddWorkspace, "to-remove")
-	resp, err := exec(t, cmds, command.CmdDelWorkspace, "to-remove")
+	_, _ = exec(t, cmds, command.CmdAddWorkspace, map[string]string{"name": "to-remove"})
+	resp, err := exec(t, cmds, command.CmdDelWorkspace, map[string]string{"name": "to-remove"})
 	if err != nil {
 		t.Fatalf("del_workspace: %v", err)
 	}
@@ -97,7 +108,7 @@ func TestRemoveWorkspaceCommand_NotFound(t *testing.T) {
 	store := newTestStore(t)
 	cmds := commands(store)
 
-	_, err := exec(t, cmds, command.CmdDelWorkspace, "nonexistent")
+	_, err := exec(t, cmds, command.CmdDelWorkspace, map[string]string{"name": "nonexistent"})
 	if err == nil {
 		t.Fatal("expected error removing nonexistent workspace, got nil")
 	}
@@ -109,7 +120,7 @@ func TestAddCatalogCommand_Success(t *testing.T) {
 	store := newTestStore(t)
 	cmds := commands(store)
 
-	resp, err := exec(t, cmds, command.CmdAddCatalog, "my-catalog")
+	resp, err := exec(t, cmds, command.CmdAddCatalog, map[string]string{"name": "my-catalog"})
 	if err != nil {
 		t.Fatalf("add_catalog: %v", err)
 	}
@@ -122,8 +133,8 @@ func TestAddCatalogCommand_Duplicate(t *testing.T) {
 	store := newTestStore(t)
 	cmds := commands(store)
 
-	_, _ = exec(t, cmds, command.CmdAddCatalog, "dup-cat")
-	_, err := exec(t, cmds, command.CmdAddCatalog, "dup-cat")
+	_, _ = exec(t, cmds, command.CmdAddCatalog, map[string]string{"name": "dup-cat"})
+	_, err := exec(t, cmds, command.CmdAddCatalog, map[string]string{"name": "dup-cat"})
 	if err == nil {
 		t.Fatal("expected error for duplicate catalog, got nil")
 	}
@@ -133,7 +144,7 @@ func TestRemoveCatalogCommand_NotFound(t *testing.T) {
 	store := newTestStore(t)
 	cmds := commands(store)
 
-	_, err := exec(t, cmds, command.CmdDelCatalog, "missing")
+	_, err := exec(t, cmds, command.CmdDelCatalog, map[string]string{"name": "missing"})
 	if err == nil {
 		t.Fatal("expected error for missing catalog, got nil")
 	}
@@ -143,7 +154,7 @@ func TestListCatalogsCommand_Empty(t *testing.T) {
 	store := newTestStore(t)
 	cmds := commands(store)
 
-	resp, err := exec(t, cmds, command.CmdListCatalogs)
+	resp, err := exec(t, cmds, command.CmdListCatalogs, nil)
 	if err != nil {
 		t.Fatalf("ls_catalogs: %v", err)
 	}
@@ -163,10 +174,10 @@ func TestListCatalogsCommand_WithEntries(t *testing.T) {
 	store := newTestStore(t)
 	cmds := commands(store)
 
-	_, _ = exec(t, cmds, command.CmdAddCatalog, "cat-a")
-	_, _ = exec(t, cmds, command.CmdAddCatalog, "cat-b")
+	_, _ = exec(t, cmds, command.CmdAddCatalog, map[string]string{"name": "cat-a"})
+	_, _ = exec(t, cmds, command.CmdAddCatalog, map[string]string{"name": "cat-b"})
 
-	resp, err := exec(t, cmds, command.CmdListCatalogs)
+	resp, err := exec(t, cmds, command.CmdListCatalogs, nil)
 	if err != nil {
 		t.Fatalf("ls_catalogs: %v", err)
 	}
@@ -204,7 +215,7 @@ func TestNewAgentThreadCommand_Success(t *testing.T) {
 	cmds := commands(store)
 	agentID := setupCatalogAndAgent(t, store)
 
-	resp, err := exec(t, cmds, command.CmdNewAgentThread, agentID, "my-thread")
+	resp, err := exec(t, cmds, command.CmdNewAgentThread, map[string]string{"agent_id": agentID, "name": "my-thread"})
 	if err != nil {
 		t.Fatalf("new_agent_thread: %v", err)
 	}
@@ -229,7 +240,7 @@ func TestNewAgentThreadCommand_AutoName(t *testing.T) {
 	cmds := commands(store)
 	agentID := setupCatalogAndAgent(t, store)
 
-	resp, err := exec(t, cmds, command.CmdNewAgentThread, agentID)
+	resp, err := exec(t, cmds, command.CmdNewAgentThread, map[string]string{"agent_id": agentID})
 	if err != nil {
 		t.Fatalf("new_agent_thread: %v", err)
 	}
@@ -247,9 +258,9 @@ func TestNewAgentThreadCommand_MissingParams(t *testing.T) {
 	store := newTestStore(t)
 	cmds := commands(store)
 
-	_, err := exec(t, cmds, command.CmdNewAgentThread)
+	_, err := exec(t, cmds, command.CmdNewAgentThread, map[string]string{})
 	if err == nil {
-		t.Fatal("expected error for missing params, got nil")
+		t.Fatal("expected error for missing agent_id, got nil")
 	}
 }
 
@@ -257,7 +268,7 @@ func TestNewAgentThreadCommand_InvalidAgentKSUID(t *testing.T) {
 	store := newTestStore(t)
 	cmds := commands(store)
 
-	_, err := exec(t, cmds, command.CmdNewAgentThread, "not-a-valid-ksuid")
+	_, err := exec(t, cmds, command.CmdNewAgentThread, map[string]string{"agent_id": "not-a-valid-ksuid"})
 	if err == nil {
 		t.Fatal("expected error for invalid KSUID, got nil")
 	}
@@ -267,8 +278,7 @@ func TestNewAgentThreadCommand_AgentNotFound(t *testing.T) {
 	store := newTestStore(t)
 	cmds := commands(store)
 
-	// Valid KSUID but nonexistent agent.
-	_, err := exec(t, cmds, command.CmdNewAgentThread, "2cDKvMGSMqCjFpuSkNdRaR7EiSa")
+	_, err := exec(t, cmds, command.CmdNewAgentThread, map[string]string{"agent_id": "2cDKvMGSMqCjFpuSkNdRaR7EiSa"})
 	if err == nil {
 		t.Fatal("expected error for nonexistent agent, got nil")
 	}
@@ -279,7 +289,7 @@ func TestListAgentThreadsCommand_Empty(t *testing.T) {
 	cmds := commands(store)
 	agentID := setupCatalogAndAgent(t, store)
 
-	resp, err := exec(t, cmds, command.CmdListAgentThreads, agentID)
+	resp, err := exec(t, cmds, command.CmdListAgentThreads, map[string]string{"agent_id": agentID})
 	if err != nil {
 		t.Fatalf("ls_agent_threads: %v", err)
 	}
@@ -298,10 +308,10 @@ func TestListAgentThreadsCommand_WithEntries(t *testing.T) {
 	cmds := commands(store)
 	agentID := setupCatalogAndAgent(t, store)
 
-	_, _ = exec(t, cmds, command.CmdNewAgentThread, agentID, "t1")
-	_, _ = exec(t, cmds, command.CmdNewAgentThread, agentID, "t2")
+	_, _ = exec(t, cmds, command.CmdNewAgentThread, map[string]string{"agent_id": agentID, "name": "t1"})
+	_, _ = exec(t, cmds, command.CmdNewAgentThread, map[string]string{"agent_id": agentID, "name": "t2"})
 
-	resp, err := exec(t, cmds, command.CmdListAgentThreads, agentID)
+	resp, err := exec(t, cmds, command.CmdListAgentThreads, map[string]string{"agent_id": agentID})
 	if err != nil {
 		t.Fatalf("ls_agent_threads: %v", err)
 	}
@@ -320,14 +330,13 @@ func TestAgentThreadHistoryCommand_Empty(t *testing.T) {
 	cmds := commands(store)
 	agentID := setupCatalogAndAgent(t, store)
 
-	// Create a thread.
-	resp, _ := exec(t, cmds, command.CmdNewAgentThread, agentID, "hist-thread")
+	resp, _ := exec(t, cmds, command.CmdNewAgentThread, map[string]string{"agent_id": agentID, "name": "hist-thread"})
 	var created struct {
 		ID string `json:"id"`
 	}
 	json.Unmarshal([]byte(resp.Message), &created)
 
-	histResp, err := exec(t, cmds, command.CmdAgentThreadHistory, created.ID)
+	histResp, err := exec(t, cmds, command.CmdAgentThreadHistory, map[string]string{"thread_id": created.ID})
 	if err != nil {
 		t.Fatalf("agent_thread_history: %v", err)
 	}
@@ -341,11 +350,16 @@ func TestAgentThreadHistoryCommand_Empty(t *testing.T) {
 	}
 }
 
-func TestAgentChatCommand_MissingParams(t *testing.T) {
+func TestAgentChatCommand_MissingMessage(t *testing.T) {
 	store := newTestStore(t)
 	cmds := commands(store)
+	agentID := setupCatalogAndAgent(t, store)
 
-	_, err := exec(t, cmds, command.CmdAgentChat, "only-one-param")
+	resp, _ := exec(t, cmds, command.CmdNewAgentThread, map[string]string{"agent_id": agentID, "name": "t"})
+	var created struct{ ID string `json:"id"` }
+	json.Unmarshal([]byte(resp.Message), &created)
+
+	_, err := exec(t, cmds, command.CmdAgentChat, map[string]string{"thread_id": created.ID})
 	if err == nil {
 		t.Fatal("expected error for missing message param, got nil")
 	}
@@ -353,21 +367,14 @@ func TestAgentChatCommand_MissingParams(t *testing.T) {
 
 // ---- SetWorkspaceCatalog command tests ----
 
-func TestSetWorkspaceCatalogCommand_TooFewParams(t *testing.T) {
-	store := newTestStore(t)
-	cmds := commands(store)
-
-	_, err := exec(t, cmds, command.CmdSetWorkspaceCatalog, "only-one-param")
-	if err == nil {
-		t.Fatal("expected error for insufficient params, got nil")
-	}
-}
-
 func TestSetWorkspaceCatalogCommand_InvalidKSUID(t *testing.T) {
 	store := newTestStore(t)
 	cmds := commands(store)
 
-	_, err := exec(t, cmds, command.CmdSetWorkspaceCatalog, "not-a-ksuid", "also-not")
+	_, err := exec(t, cmds, command.CmdSetWorkspaceCatalog, map[string]string{
+		"workspace_id": "not-a-ksuid",
+		"catalog_id":   "also-not",
+	})
 	if err == nil {
 		t.Fatal("expected error for invalid KSUID, got nil")
 	}
@@ -375,21 +382,14 @@ func TestSetWorkspaceCatalogCommand_InvalidKSUID(t *testing.T) {
 
 // ---- SetWorkspaceRouter command tests ----
 
-func TestSetWorkspaceRouterCommand_TooFewParams(t *testing.T) {
-	store := newTestStore(t)
-	cmds := commands(store)
-
-	_, err := exec(t, cmds, command.CmdSetWorkspaceRouter, "one-param")
-	if err == nil {
-		t.Fatal("expected error for insufficient params, got nil")
-	}
-}
-
 func TestSetWorkspaceRouterCommand_InvalidKSUID(t *testing.T) {
 	store := newTestStore(t)
 	cmds := commands(store)
 
-	_, err := exec(t, cmds, command.CmdSetWorkspaceRouter, "bad-id", "bad-id2")
+	_, err := exec(t, cmds, command.CmdSetWorkspaceRouter, map[string]string{
+		"workspace_id": "bad-id",
+		"agent_id":     "bad-id2",
+	})
 	if err == nil {
 		t.Fatal("expected error for invalid KSUIDs, got nil")
 	}
@@ -399,9 +399,6 @@ func TestSetWorkspaceRouterCommand_InvalidKSUID(t *testing.T) {
 
 func newSchedForTest(t *testing.T) *scheduler.Scheduler {
 	t.Helper()
-	// Not started — activities are buffered but never executed.
-	// This lets us verify that commands return a job_id without actually
-	// invoking the runner (which is nil in unit tests).
 	return scheduler.NewScheduler(1)
 }
 
@@ -411,7 +408,7 @@ func TestRunAgentCommand_ReturnsJobID(t *testing.T) {
 	cmds := commandsWithSched(store, sched)
 	agentID := setupCatalogAndAgent(t, store)
 
-	resp, err := exec(t, cmds, command.CmdRunAgent, agentID, "hello")
+	resp, err := exec(t, cmds, command.CmdRunAgent, map[string]string{"agent_id": agentID, "input": "hello"})
 	if err != nil {
 		t.Fatalf("run_agent: %v", err)
 	}
@@ -432,7 +429,7 @@ func TestRunAgentCommand_InvalidAgentID(t *testing.T) {
 	sched := newSchedForTest(t)
 	cmds := commandsWithSched(store, sched)
 
-	_, err := exec(t, cmds, command.CmdRunAgent, "not-a-ksuid", "hello")
+	_, err := exec(t, cmds, command.CmdRunAgent, map[string]string{"agent_id": "not-a-ksuid", "input": "hello"})
 	if err == nil {
 		t.Fatal("expected error for invalid agent_id, got nil")
 	}
@@ -443,7 +440,7 @@ func TestRunAgentCommand_AgentNotFound(t *testing.T) {
 	sched := newSchedForTest(t)
 	cmds := commandsWithSched(store, sched)
 
-	_, err := exec(t, cmds, command.CmdRunAgent, "2cDKvMGSMqCjFpuSkNdRaR7EiSa", "hello")
+	_, err := exec(t, cmds, command.CmdRunAgent, map[string]string{"agent_id": "2cDKvMGSMqCjFpuSkNdRaR7EiSa", "input": "hello"})
 	if err == nil {
 		t.Fatal("expected error for nonexistent agent, got nil")
 	}
@@ -454,7 +451,6 @@ func TestChatCommand_ReturnsJobID(t *testing.T) {
 	sched := newSchedForTest(t)
 	cmds := commandsWithSched(store, sched)
 
-	// Create workspace via store, then thread via command.
 	if err := store.AddWorkspace("chat-ws"); err != nil {
 		t.Fatalf("AddWorkspace: %v", err)
 	}
@@ -464,7 +460,7 @@ func TestChatCommand_ReturnsJobID(t *testing.T) {
 		break
 	}
 
-	tResp, err := exec(t, cmds, command.CmdNewThread, wsID, "chat-thread")
+	tResp, err := exec(t, cmds, command.CmdNewThread, map[string]string{"workspace_id": wsID, "name": "chat-thread"})
 	if err != nil {
 		t.Fatalf("new_thread: %v", err)
 	}
@@ -473,7 +469,7 @@ func TestChatCommand_ReturnsJobID(t *testing.T) {
 	}
 	json.Unmarshal([]byte(tResp.Message), &thread)
 
-	resp, err := exec(t, cmds, command.CmdChat, thread.ID, "hello")
+	resp, err := exec(t, cmds, command.CmdChat, map[string]string{"thread_id": thread.ID, "message": "hello"})
 	if err != nil {
 		t.Fatalf("chat: %v", err)
 	}
@@ -494,7 +490,7 @@ func TestChatCommand_InvalidThreadID(t *testing.T) {
 	sched := newSchedForTest(t)
 	cmds := commandsWithSched(store, sched)
 
-	_, err := exec(t, cmds, command.CmdChat, "not-a-ksuid", "hello")
+	_, err := exec(t, cmds, command.CmdChat, map[string]string{"thread_id": "not-a-ksuid", "message": "hello"})
 	if err == nil {
 		t.Fatal("expected error for invalid thread_id, got nil")
 	}
@@ -506,7 +502,7 @@ func TestAgentChatCommand_ReturnsJobID(t *testing.T) {
 	cmds := commandsWithSched(store, sched)
 	agentID := setupCatalogAndAgent(t, store)
 
-	tResp, err := exec(t, cmds, command.CmdNewAgentThread, agentID, "ac-thread")
+	tResp, err := exec(t, cmds, command.CmdNewAgentThread, map[string]string{"agent_id": agentID, "name": "ac-thread"})
 	if err != nil {
 		t.Fatalf("new_agent_thread: %v", err)
 	}
@@ -515,7 +511,7 @@ func TestAgentChatCommand_ReturnsJobID(t *testing.T) {
 	}
 	json.Unmarshal([]byte(tResp.Message), &thread)
 
-	resp, err := exec(t, cmds, command.CmdAgentChat, thread.ID, "hello")
+	resp, err := exec(t, cmds, command.CmdAgentChat, map[string]string{"thread_id": thread.ID, "message": "hello"})
 	if err != nil {
 		t.Fatalf("agent_chat: %v", err)
 	}
@@ -536,8 +532,34 @@ func TestAgentChatCommand_InvalidThreadID(t *testing.T) {
 	sched := newSchedForTest(t)
 	cmds := commandsWithSched(store, sched)
 
-	_, err := exec(t, cmds, command.CmdAgentChat, "not-a-ksuid", "hello")
+	_, err := exec(t, cmds, command.CmdAgentChat, map[string]string{"thread_id": "not-a-ksuid", "message": "hello"})
 	if err == nil {
 		t.Fatal("expected error for invalid thread_id, got nil")
+	}
+}
+
+// ---- del_agent command tests ----
+
+func TestDelAgentCommand_Success(t *testing.T) {
+	store := newTestStore(t)
+	cmds := commands(store)
+	agentID := setupCatalogAndAgent(t, store)
+
+	resp, err := exec(t, cmds, command.CmdDelAgent, map[string]string{"agent_id": agentID})
+	if err != nil {
+		t.Fatalf("del_agent: %v", err)
+	}
+	if resp.Message != "ok" {
+		t.Errorf("message = %q, want %q", resp.Message, "ok")
+	}
+}
+
+func TestDelAgentCommand_NotFound(t *testing.T) {
+	store := newTestStore(t)
+	cmds := commands(store)
+
+	_, err := exec(t, cmds, command.CmdDelAgent, map[string]string{"agent_id": "2cDKvMGSMqCjFpuSkNdRaR7EiSa"})
+	if err == nil {
+		t.Fatal("expected error for nonexistent agent, got nil")
 	}
 }

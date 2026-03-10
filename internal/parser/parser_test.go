@@ -1,6 +1,7 @@
 package parser_test
 
 import (
+	"encoding/json"
 	"testing"
 
 	"slate/internal/parser"
@@ -10,59 +11,35 @@ func TestParseRequest(t *testing.T) {
 	p := parser.New()
 
 	tests := []struct {
-		name        string
-		input       string
-		wantCmd     string
-		wantParams  []string
-		wantErr     bool
+		name    string
+		input   string
+		wantCmd string
+		wantErr bool
 	}{
 		{
-			name:       "simple command no params",
-			input:      "health",
-			wantCmd:    "health",
-			wantParams: []string{},
+			name:    "simple command no params",
+			input:   `{"cmd":"health"}`,
+			wantCmd: "health",
 		},
 		{
-			name:       "command with one param",
-			input:      "add_workspace myws",
-			wantCmd:    "add_workspace",
-			wantParams: []string{"myws"},
+			name:    "command with params",
+			input:   `{"cmd":"add_workspace","params":{"name":"myws"}}`,
+			wantCmd: "add_workspace",
 		},
 		{
-			name:       "command with multiple params",
-			input:      "add_agent catalogid myagent",
-			wantCmd:    "add_agent",
-			wantParams: []string{"catalogid", "myagent"},
+			name:    "uppercase cmd is lowercased",
+			input:   `{"cmd":"HEALTH"}`,
+			wantCmd: "health",
 		},
 		{
-			name:       "uppercase command is lowercased",
-			input:      "HEALTH",
-			wantCmd:    "health",
-			wantParams: []string{},
+			name:    "empty string returns empty command",
+			input:   "",
+			wantCmd: "",
 		},
 		{
-			name:       "mixed case command is lowercased",
-			input:      "Add_Workspace foo",
-			wantCmd:    "add_workspace",
-			wantParams: []string{"foo"},
-		},
-		{
-			name:       "leading and trailing whitespace trimmed",
-			input:      "  health  ",
-			wantCmd:    "health",
-			wantParams: []string{},
-		},
-		{
-			name:       "empty string returns empty command",
-			input:      "",
-			wantCmd:    "",
-			wantParams: []string{},
-		},
-		{
-			name:       "command with trailing space preserves empty param",
-			input:      "set_agent_instructions agentid instructions here",
-			wantCmd:    "set_agent_instructions",
-			wantParams: []string{"agentid", "instructions", "here"},
+			name:    "invalid JSON returns error",
+			input:   "not json",
+			wantErr: true,
 		},
 	}
 
@@ -81,15 +58,29 @@ func TestParseRequest(t *testing.T) {
 			if got.Command != tc.wantCmd {
 				t.Errorf("Command = %q, want %q", got.Command, tc.wantCmd)
 			}
-			if len(got.Params) != len(tc.wantParams) {
-				t.Errorf("Params = %v, want %v", got.Params, tc.wantParams)
-				return
-			}
-			for i, p := range tc.wantParams {
-				if got.Params[i] != p {
-					t.Errorf("Params[%d] = %q, want %q", i, got.Params[i], p)
-				}
-			}
 		})
+	}
+}
+
+func TestParseRequest_ParamsPassedThrough(t *testing.T) {
+	p := parser.New()
+
+	req, err := p.ParseRequest(`{"cmd":"add_agent","params":{"catalog_id":"abc","name":"myagent"}}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var params struct {
+		CatalogID string `json:"catalog_id"`
+		Name      string `json:"name"`
+	}
+	if err := json.Unmarshal(req.Params, &params); err != nil {
+		t.Fatalf("failed to unmarshal params: %v", err)
+	}
+	if params.CatalogID != "abc" {
+		t.Errorf("catalog_id = %q, want %q", params.CatalogID, "abc")
+	}
+	if params.Name != "myagent" {
+		t.Errorf("name = %q, want %q", params.Name, "myagent")
 	}
 }

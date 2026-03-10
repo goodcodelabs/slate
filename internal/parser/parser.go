@@ -1,6 +1,8 @@
 package parser
 
 import (
+	"encoding/json"
+	"fmt"
 	"log/slog"
 	"os"
 	"strings"
@@ -8,26 +10,31 @@ import (
 
 func New() *Parser {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-
-	return &Parser{
-		logger: logger,
-	}
+	return &Parser{logger: logger}
 }
 
-func (p *Parser) ParseRequest(request string) (*ParsedRequest, error) {
-	parts := strings.Split(sanitizeRequest(request), " ")
+// ParseRequest parses a JSON-encoded request line.
+// Expected format: {"cmd":"...", "params":{...}}
+func (p *Parser) ParseRequest(line string) (*ParsedRequest, error) {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return &ParsedRequest{Command: "", Params: json.RawMessage("{}")}, nil
+	}
 
-	if len(parts) == 0 {
-		return nil, ErrUnknownCommand
+	var req struct {
+		Cmd    string          `json:"cmd"`
+		Params json.RawMessage `json:"params"`
+	}
+	if err := json.Unmarshal([]byte(line), &req); err != nil {
+		return nil, fmt.Errorf("invalid JSON request: %w", err)
+	}
+
+	if req.Params == nil {
+		req.Params = json.RawMessage("{}")
 	}
 
 	return &ParsedRequest{
-		Command: strings.ToLower(parts[0]),
-		Params:  parts[1:],
+		Command: strings.ToLower(req.Cmd),
+		Params:  req.Params,
 	}, nil
-
-}
-
-func sanitizeRequest(request string) string {
-	return strings.TrimSpace(request)
 }

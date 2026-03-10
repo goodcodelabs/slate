@@ -31,15 +31,6 @@ type Store interface {
 	// AppendMessage appends a single message to a thread's message log
 	AppendMessage(threadID ksuid.KSUID, msg llm.Message) error
 
-	// SaveAgentThread persists agent thread metadata (not messages) to disk
-	SaveAgentThread(t *AgentThread) error
-
-	// DeleteAgentThread removes an agent thread and its message log from disk
-	DeleteAgentThread(id ksuid.KSUID) error
-
-	// AppendAgentMessage appends a single message to an agent thread's message log
-	AppendAgentMessage(threadID ksuid.KSUID, msg llm.Message) error
-
 	// SavePipeline persists a pipeline snapshot to disk
 	SavePipeline(p *Pipeline) error
 

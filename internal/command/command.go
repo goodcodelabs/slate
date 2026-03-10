@@ -1,6 +1,8 @@
 package command
 
 import (
+	"encoding/json"
+
 	"slate/internal/agent"
 	"slate/internal/data"
 	"slate/internal/metrics"
@@ -19,6 +21,7 @@ const (
 	CmdListCatalogs         = "ls_catalogs"
 	CmdHealth               = "health"
 	CmdAddAgent             = "add_agent"
+	CmdDelAgent             = "del_agent"
 	CmdSetAgentInstructions = "set_agent_instructions"
 	CmdSetAgentModel        = "set_agent_model"
 	CmdRunAgent             = "run_agent"
@@ -29,27 +32,31 @@ const (
 	CmdAddTool              = "add_tool"
 	CmdRemoveTool           = "remove_tool"
 	CmdListTools            = "ls_tools"
-	CmdNewAgentThread        = "new_agent_thread"
-	CmdAgentChat             = "agent_chat"
-	CmdListAgentThreads      = "ls_agent_threads"
-	CmdAgentThreadHistory    = "agent_thread_history"
-	CmdSetWorkspaceCatalog   = "set_workspace_catalog"
-	CmdSetWorkspaceRouter    = "set_workspace_router"
-	CmdListPipelines         = "ls_pipelines"
+	CmdNewAgentThread       = "new_agent_thread"
+	CmdAgentChat            = "agent_chat"
+	CmdListAgentThreads     = "ls_agent_threads"
+	CmdAgentThreadHistory   = "agent_thread_history"
+	CmdSetWorkspaceCatalog  = "set_workspace_catalog"
+	CmdSetWorkspaceRouter   = "set_workspace_router"
+	CmdListPipelines        = "ls_pipelines"
 	CmdCreatePipeline       = "create_pipeline"
 	CmdAddPipelineStep      = "add_pipeline_step"
 	CmdRunPipeline          = "run_pipeline"
-	CmdJobStatus      = "job_status"
-	CmdJobResult      = "job_result"
-	CmdSystemMetrics  = "system_metrics"
-	CmdSystemStats    = "system_stats"
-	CmdListJobs       = "ls_jobs"
-	CmdCancelJob      = "cancel_job"
+	CmdJobStatus            = "job_status"
+	CmdJobResult            = "job_result"
+	CmdWaitJob              = "wait_job"
+	CmdSystemMetrics        = "system_metrics"
+	CmdSystemStats          = "system_stats"
+	CmdListJobs             = "ls_jobs"
+	CmdCancelJob            = "cancel_job"
 )
 
+// Command is the internal interface all protocol commands implement.
+// params is the raw JSON params object from the request.
 type Command interface {
-	Execute(commandContext Context, params []string) (*Response, error)
+	Execute(commandContext Context, params json.RawMessage) (*Response, error)
 }
+
 type ProtocolCommand struct {
 	cmd Command
 }
@@ -63,12 +70,8 @@ type Context struct {
 	SessionID ksuid.KSUID
 }
 
-func (p *ProtocolCommand) Execute(commandContext Context, params []string) (*Response, error) {
-	val, err := p.cmd.Execute(commandContext, params)
-	if err != nil {
-		return nil, err
-	}
-	return val, nil
+func (p *ProtocolCommand) Execute(commandContext Context, params json.RawMessage) (*Response, error) {
+	return p.cmd.Execute(commandContext, params)
 }
 
 func InitCommands(store *data.Data, runner *agent.Runner, sched *scheduler.Scheduler, met *metrics.Metrics) map[string]ProtocolCommand {
@@ -81,6 +84,7 @@ func InitCommands(store *data.Data, runner *agent.Runner, sched *scheduler.Sched
 		CmdListCatalogs:         {cmd: &ListCatalogsCommand{store: store}},
 		CmdHealth:               {cmd: &HealthCommand{}},
 		CmdAddAgent:             {cmd: &AddAgentCommand{store: store}},
+		CmdDelAgent:             {cmd: &DelAgentCommand{store: store}},
 		CmdSetAgentInstructions: {cmd: &SetAgentInstructionsCommand{store: store}},
 		CmdSetAgentModel:        {cmd: &SetAgentModelCommand{store: store}},
 		CmdRunAgent:             {cmd: &RunAgentCommand{store: store, runner: runner, sched: sched}},
@@ -101,11 +105,12 @@ func InitCommands(store *data.Data, runner *agent.Runner, sched *scheduler.Sched
 		CmdCreatePipeline:       {cmd: &CreatePipelineCommand{store: store}},
 		CmdAddPipelineStep:      {cmd: &AddPipelineStepCommand{store: store}},
 		CmdRunPipeline:          {cmd: &RunPipelineCommand{store: store, runner: runner, sched: sched}},
-		CmdJobStatus:     {cmd: &JobStatusCommand{store: store}},
-		CmdJobResult:     {cmd: &JobResultCommand{store: store}},
-		CmdSystemMetrics: {cmd: &SystemMetricsCommand{metrics: met}},
-		CmdSystemStats:   {cmd: &SystemStatsCommand{store: store, sched: sched, metrics: met}},
-		CmdListJobs:      {cmd: &ListJobsCommand{store: store}},
-		CmdCancelJob:     {cmd: &CancelJobCommand{store: store}},
+		CmdJobStatus:            {cmd: &JobStatusCommand{store: store}},
+		CmdJobResult:            {cmd: &JobResultCommand{store: store}},
+		CmdWaitJob:              {cmd: &WaitJobCommand{store: store}},
+		CmdSystemMetrics:        {cmd: &SystemMetricsCommand{metrics: met}},
+		CmdSystemStats:          {cmd: &SystemStatsCommand{store: store, sched: sched, metrics: met}},
+		CmdListJobs:             {cmd: &ListJobsCommand{store: store}},
+		CmdCancelJob:            {cmd: &CancelJobCommand{store: store}},
 	}
 }

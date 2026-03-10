@@ -1,12 +1,9 @@
 package command
 
-import (
-	"fmt"
-)
+import "encoding/json"
 
-type HealthCommand struct {
-}
+type HealthCommand struct{}
 
-func (c *HealthCommand) Execute(_ Context, _ []string) (*Response, error) {
-	return &Response{Message: fmt.Sprintf("ok")}, nil
+func (c *HealthCommand) Execute(_ Context, _ json.RawMessage) (*Response, error) {
+	return &Response{Message: "ok"}, nil
 }

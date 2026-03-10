@@ -266,7 +266,7 @@ func TestRunner_RunAgentThread_AgentNotFound(t *testing.T) {
 	// Create agent thread then delete the underlying agent by pointing to an unknown ID.
 	// Easiest: just create a thread with a fake agentID directly in the map.
 	fakeID := ksuid.New()
-	db.AgentThreads[fakeID] = &data.AgentThread{
+	db.Threads[fakeID] = &data.Thread{
 		ID:      fakeID,
 		AgentID: ksuid.New(), // nonexistent agent
 		Name:    "orphan",

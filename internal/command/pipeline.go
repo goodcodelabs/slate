@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 
 	"github.com/segmentio/ksuid"
 	"slate/internal/agent"
@@ -12,16 +11,19 @@ import (
 	"slate/internal/scheduler"
 )
 
-// ListPipelinesCommand handles: ls_pipelines <workspace_id>
+// ListPipelinesCommand handles: ls_pipelines
 type ListPipelinesCommand struct {
 	store *data.Data
 }
 
-func (c *ListPipelinesCommand) Execute(_ Context, params []string) (*Response, error) {
-	if len(params) < 1 {
-		return nil, fmt.Errorf("usage: ls_pipelines <workspace_id>")
+func (c *ListPipelinesCommand) Execute(_ Context, params json.RawMessage) (*Response, error) {
+	var p struct {
+		WorkspaceID string `json:"workspace_id"`
 	}
-	wsID, err := ksuid.Parse(params[0])
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	wsID, err := ksuid.Parse(p.WorkspaceID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid workspace_id: %w", err)
 	}
@@ -35,66 +37,77 @@ func (c *ListPipelinesCommand) Execute(_ Context, params []string) (*Response, e
 		Mode    string `json:"mode"`
 	}
 	type pipelineSummary struct {
-		ID   string        `json:"id"`
-		Name string        `json:"name"`
+		ID    string        `json:"id"`
+		Name  string        `json:"name"`
 		Steps []stepSummary `json:"steps"`
 	}
 
 	summaries := make([]pipelineSummary, 0, len(pipelines))
-	for _, p := range pipelines {
-		steps := make([]stepSummary, 0, len(p.Steps))
-		for _, s := range p.Steps {
+	for _, pl := range pipelines {
+		steps := make([]stepSummary, 0, len(pl.Steps))
+		for _, s := range pl.Steps {
 			steps = append(steps, stepSummary{AgentID: s.AgentID.String(), Mode: string(s.Mode)})
 		}
-		summaries = append(summaries, pipelineSummary{ID: p.ID.String(), Name: p.Name, Steps: steps})
+		summaries = append(summaries, pipelineSummary{ID: pl.ID.String(), Name: pl.Name, Steps: steps})
 	}
 
 	out, _ := json.Marshal(map[string]interface{}{"pipelines": summaries})
 	return &Response{Message: string(out)}, nil
 }
 
-// CreatePipelineCommand handles: create_pipeline <workspace_id> <name>
+// CreatePipelineCommand handles: create_pipeline
 type CreatePipelineCommand struct {
 	store *data.Data
 }
 
-func (c *CreatePipelineCommand) Execute(_ Context, params []string) (*Response, error) {
-	if len(params) < 2 {
-		return nil, fmt.Errorf("usage: create_pipeline <workspace_id> <name>")
+func (c *CreatePipelineCommand) Execute(_ Context, params json.RawMessage) (*Response, error) {
+	var p struct {
+		WorkspaceID string `json:"workspace_id"`
+		Name        string `json:"name"`
 	}
-	wsID, err := ksuid.Parse(params[0])
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	wsID, err := ksuid.Parse(p.WorkspaceID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid workspace_id: %w", err)
 	}
-	name := strings.Join(params[1:], " ")
-	p, err := c.store.NewPipeline(wsID, name)
+	if p.Name == "" {
+		return nil, fmt.Errorf("name is required")
+	}
+	pl, err := c.store.NewPipeline(wsID, p.Name)
 	if err != nil {
 		return nil, err
 	}
-	out, _ := json.Marshal(map[string]string{"pipeline_id": p.ID.String()})
+	out, _ := json.Marshal(map[string]string{"pipeline_id": pl.ID.String()})
 	return &Response{Message: string(out)}, nil
 }
 
-// AddPipelineStepCommand handles: add_pipeline_step <pipeline_id> <agent_id> <mode>
+// AddPipelineStepCommand handles: add_pipeline_step
 type AddPipelineStepCommand struct {
 	store *data.Data
 }
 
-func (c *AddPipelineStepCommand) Execute(_ Context, params []string) (*Response, error) {
-	if len(params) < 3 {
-		return nil, fmt.Errorf("usage: add_pipeline_step <pipeline_id> <agent_id> <mode>")
+func (c *AddPipelineStepCommand) Execute(_ Context, params json.RawMessage) (*Response, error) {
+	var p struct {
+		PipelineID string `json:"pipeline_id"`
+		AgentID    string `json:"agent_id"`
+		Mode       string `json:"mode"`
 	}
-	pipelineID, err := ksuid.Parse(params[0])
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	pipelineID, err := ksuid.Parse(p.PipelineID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid pipeline_id: %w", err)
 	}
-	agentID, err := ksuid.Parse(params[1])
+	agentID, err := ksuid.Parse(p.AgentID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid agent_id: %w", err)
 	}
-	mode := data.StepMode(params[2])
+	mode := data.StepMode(p.Mode)
 	if mode != data.StepModeSequential && mode != data.StepModeParallel {
-		return nil, fmt.Errorf("invalid mode: must be 'sequential' or 'parallel'")
+		return nil, fmt.Errorf("mode must be \"sequential\" or \"parallel\"")
 	}
 	if err := c.store.AddPipelineStep(pipelineID, agentID, mode); err != nil {
 		return nil, err
@@ -102,35 +115,40 @@ func (c *AddPipelineStepCommand) Execute(_ Context, params []string) (*Response,
 	return &Response{Message: "ok"}, nil
 }
 
-// RunPipelineCommand handles: run_pipeline <pipeline_id> <input>
-// Creates an async job, schedules pipeline execution, and returns the job ID immediately.
+// RunPipelineCommand handles: run_pipeline
+// Creates an async job and returns the job ID immediately.
 type RunPipelineCommand struct {
 	store  *data.Data
 	runner *agent.Runner
 	sched  *scheduler.Scheduler
 }
 
-func (c *RunPipelineCommand) Execute(_ Context, params []string) (*Response, error) {
-	if len(params) < 2 {
-		return nil, fmt.Errorf("usage: run_pipeline <pipeline_id> <input>")
+func (c *RunPipelineCommand) Execute(_ Context, params json.RawMessage) (*Response, error) {
+	var p struct {
+		PipelineID string `json:"pipeline_id"`
+		Input      string `json:"input"`
 	}
-	pipelineID, err := ksuid.Parse(params[0])
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	pipelineID, err := ksuid.Parse(p.PipelineID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid pipeline_id: %w", err)
 	}
-	input := strings.Join(params[1:], " ")
+	if p.Input == "" {
+		return nil, fmt.Errorf("input is required")
+	}
 
 	pipeline, err := c.store.GetPipeline(pipelineID)
 	if err != nil {
 		return nil, err
 	}
 
-	job, err := c.store.CreateJob("pipeline", pipeline.WorkspaceID, pipelineID, input)
+	job, err := c.store.CreateJob("pipeline", pipeline.WorkspaceID, pipelineID, p.Input)
 	if err != nil {
 		return nil, err
 	}
 
-	// Create a cancellable context so the job can be stopped via cancel_job.
 	jobCtx, cancel := context.WithCancel(context.Background())
 	_ = c.store.SetJobCancel(job.ID, cancel)
 
@@ -138,7 +156,7 @@ func (c *RunPipelineCommand) Execute(_ Context, params []string) (*Response, err
 		Job: func() {
 			defer cancel()
 			_ = c.store.UpdateJob(job.ID, data.JobRunning, "", "")
-			result, runErr := c.runner.RunPipeline(jobCtx, pipelineID, input)
+			result, runErr := c.runner.RunPipeline(jobCtx, pipelineID, p.Input)
 			if runErr != nil {
 				_ = c.store.UpdateJob(job.ID, data.JobFailed, "", runErr.Error())
 			} else {

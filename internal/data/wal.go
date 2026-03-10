@@ -197,14 +197,23 @@ func applyWALEntry(data *Data, entry *WALEntry) error {
 		delete(data.Pipelines, entry.EntityID)
 
 	case OpAddAgentThread:
-		var thread AgentThread
-		if err := msgpack.Unmarshal(entry.Data, &thread); err != nil {
+		// Legacy op: convert AgentThread to the unified Thread type.
+		var at AgentThread
+		if err := msgpack.Unmarshal(entry.Data, &at); err != nil {
 			return fmt.Errorf("failed to unmarshal agent thread: %w", err)
 		}
-		data.AgentThreads[thread.ID] = &thread
+		data.Threads[at.ID] = &Thread{
+			ID:        at.ID,
+			AgentID:   at.AgentID,
+			Name:      at.Name,
+			State:     at.State,
+			CreatedAt: at.CreatedAt,
+			UpdatedAt: at.UpdatedAt,
+		}
 
 	case OpRemoveAgentThread:
-		delete(data.AgentThreads, entry.EntityID)
+		// Legacy op: agent-direct threads are now in the unified Threads map.
+		delete(data.Threads, entry.EntityID)
 
 	default:
 		return fmt.Errorf("unknown operation type: %s", entry.Operation)

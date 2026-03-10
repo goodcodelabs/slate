@@ -1,6 +1,9 @@
 package parser
 
-import "log/slog"
+import (
+	"encoding/json"
+	"log/slog"
+)
 
 type Parser struct {
 	logger *slog.Logger
@@ -8,5 +11,5 @@ type Parser struct {
 
 type ParsedRequest struct {
 	Command string
-	Params  []string
+	Params  json.RawMessage
 }

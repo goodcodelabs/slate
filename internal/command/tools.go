@@ -8,62 +8,79 @@ import (
 	"slate/internal/data"
 )
 
-// AddToolCommand handles: add_tool <agent_id> <tool_name>
+// AddToolCommand handles: add_tool
 type AddToolCommand struct {
 	store *data.Data
 }
 
-func (c *AddToolCommand) Execute(_ Context, params []string) (*Response, error) {
-	if len(params) < 2 {
-		return nil, fmt.Errorf("usage: add_tool <agent_id> <tool_name>")
+func (c *AddToolCommand) Execute(_ Context, params json.RawMessage) (*Response, error) {
+	var p struct {
+		AgentID string `json:"agent_id"`
+		Tool    string `json:"tool"`
 	}
-	agentID, err := ksuid.Parse(params[0])
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	agentID, err := ksuid.Parse(p.AgentID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid agent_id: %w", err)
 	}
-	if err := c.store.AddAgentTool(agentID, params[1]); err != nil {
+	if p.Tool == "" {
+		return nil, fmt.Errorf("tool is required")
+	}
+	if err := c.store.AddAgentTool(agentID, p.Tool); err != nil {
 		return nil, err
 	}
 	return &Response{Message: "ok"}, nil
 }
 
-// RemoveToolCommand handles: remove_tool <agent_id> <tool_name>
+// RemoveToolCommand handles: remove_tool
 type RemoveToolCommand struct {
 	store *data.Data
 }
 
-func (c *RemoveToolCommand) Execute(_ Context, params []string) (*Response, error) {
-	if len(params) < 2 {
-		return nil, fmt.Errorf("usage: remove_tool <agent_id> <tool_name>")
+func (c *RemoveToolCommand) Execute(_ Context, params json.RawMessage) (*Response, error) {
+	var p struct {
+		AgentID string `json:"agent_id"`
+		Tool    string `json:"tool"`
 	}
-	agentID, err := ksuid.Parse(params[0])
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	agentID, err := ksuid.Parse(p.AgentID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid agent_id: %w", err)
 	}
-	if err := c.store.RemoveAgentTool(agentID, params[1]); err != nil {
+	if p.Tool == "" {
+		return nil, fmt.Errorf("tool is required")
+	}
+	if err := c.store.RemoveAgentTool(agentID, p.Tool); err != nil {
 		return nil, err
 	}
 	return &Response{Message: "ok"}, nil
 }
 
-// ListToolsCommand handles: ls_tools <agent_id>
+// ListToolsCommand handles: ls_tools
 type ListToolsCommand struct {
 	store *data.Data
 }
 
-func (c *ListToolsCommand) Execute(_ Context, params []string) (*Response, error) {
-	if len(params) < 1 {
-		return nil, fmt.Errorf("usage: ls_tools <agent_id>")
+func (c *ListToolsCommand) Execute(_ Context, params json.RawMessage) (*Response, error) {
+	var p struct {
+		AgentID string `json:"agent_id"`
 	}
-	agentID, err := ksuid.Parse(params[0])
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	agentID, err := ksuid.Parse(p.AgentID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid agent_id: %w", err)
 	}
-	agent, _, err := c.store.FindAgent(agentID)
+	a, _, err := c.store.FindAgent(agentID)
 	if err != nil {
 		return nil, err
 	}
-	tools := agent.Tools
+	tools := a.Tools
 	if tools == nil {
 		tools = []string{}
 	}

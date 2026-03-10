@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"time"
@@ -176,6 +177,15 @@ func (r *Runner) RunAgentThread(ctx context.Context, threadID ksuid.KSUID, input
 type RunOptions struct {
 	// SystemPromptSuffix is appended to the agent's instructions (separated by a blank line).
 	SystemPromptSuffix string
+
+	// OnToken is called with the full text content of each LLM response turn.
+	OnToken func(text string)
+
+	// OnToolCall is called before each tool is executed, with its name and raw JSON input.
+	OnToolCall func(name string, input json.RawMessage)
+
+	// OnToolResult is called after each tool executes, with the tool use ID, name, and output.
+	OnToolResult func(toolUseID, name, output string)
 }
 
 // Run executes the agent identified by agentID against the given input.
@@ -295,12 +305,21 @@ func (r *Runner) RunWithOptions(ctx context.Context, agentID ksuid.KSUID, input 
 		messages = append(messages, resp.Message)
 		iteration++
 
+		// Fire OnToken with any text content in this response.
+		if opts.OnToken != nil {
+			for _, c := range resp.Message.Content {
+				if c.Type == llm.ContentTypeText && c.Text != "" {
+					opts.OnToken(c.Text)
+				}
+			}
+		}
+
 		if resp.StopReason != "tool_use" {
 			break
 		}
 
 		// Execute every tool call the model requested.
-		toolResults, err := r.executeToolCalls(ctx, agentID, resp.Message.Content)
+		toolResults, err := r.executeToolCalls(ctx, agentID, resp.Message.Content, opts.OnToolCall, opts.OnToolResult)
 		if err != nil {
 			return nil, err
 		}
@@ -335,7 +354,13 @@ func (r *Runner) RunWithOptions(ctx context.Context, agentID ksuid.KSUID, input 
 
 // executeToolCalls dispatches every tool_use block in content and returns
 // tool_result content blocks to be appended as the next user turn.
-func (r *Runner) executeToolCalls(ctx context.Context, agentID ksuid.KSUID, content []llm.Content) ([]llm.Content, error) {
+func (r *Runner) executeToolCalls(
+	ctx context.Context,
+	agentID ksuid.KSUID,
+	content []llm.Content,
+	onToolCall func(string, json.RawMessage),
+	onToolResult func(string, string, string),
+) ([]llm.Content, error) {
 	if r.registry == nil {
 		return nil, nil
 	}
@@ -343,6 +368,10 @@ func (r *Runner) executeToolCalls(ctx context.Context, agentID ksuid.KSUID, cont
 	for _, c := range content {
 		if c.Type != llm.ContentTypeToolUse {
 			continue
+		}
+
+		if onToolCall != nil {
+			onToolCall(c.Name, c.Input)
 		}
 
 		toolStart := time.Now()
@@ -382,6 +411,11 @@ func (r *Runner) executeToolCalls(ctx context.Context, agentID ksuid.KSUID, cont
 		} else {
 			result.Output = string(output)
 		}
+
+		if onToolResult != nil {
+			onToolResult(c.ID, c.Name, result.Output)
+		}
+
 		results = append(results, result)
 	}
 	return results, nil

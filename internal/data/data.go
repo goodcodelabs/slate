@@ -9,34 +9,48 @@ import (
 	"slate/internal/llm"
 )
 
+// findAgent looks up an agent by ID using the O(1) index.
+// Callers must hold at least a read lock on db.mu before calling this.
+func (db *Data) findAgent(agentID ksuid.KSUID) (*Agent, *Catalog, error) {
+	a, ok := db.agentIndex[agentID]
+	if !ok {
+		return nil, nil, errors.New("agent not found")
+	}
+	cat := db.agentCatalog[agentID]
+	return a, cat, nil
+}
+
 func New(name, dataDir string) (*Data, error) {
-	// Initialize file store
 	store, err := NewFileStore(dataDir)
 	if err != nil {
 		return nil, err
 	}
 
-	// Load existing data from disk
 	db, err := store.Load()
 	if err != nil {
 		return nil, err
 	}
 
-	// Attach store to data
 	db.store = store
 
-	// Ensure maps are always initialised (Load initialises them, but be safe)
 	if db.Threads == nil {
 		db.Threads = make(map[ksuid.KSUID]*Thread)
 	}
 	if db.Pipelines == nil {
 		db.Pipelines = make(map[ksuid.KSUID]*Pipeline)
 	}
-	if db.AgentThreads == nil {
-		db.AgentThreads = make(map[ksuid.KSUID]*AgentThread)
-	}
-	// Jobs are always fresh — they are not persisted across restarts.
+	// Jobs are always fresh — not persisted across restarts.
 	db.Jobs = make(map[ksuid.KSUID]*Job)
+
+	// Build agent index from loaded catalogs.
+	db.agentIndex = make(map[ksuid.KSUID]*Agent)
+	db.agentCatalog = make(map[ksuid.KSUID]*Catalog)
+	for _, catalog := range db.Catalogs {
+		for _, a := range catalog.Agents {
+			db.agentIndex[a.ID] = a
+			db.agentCatalog[a.ID] = catalog
+		}
+	}
 
 	return db, nil
 }
@@ -49,6 +63,8 @@ func (db *Data) Close() error {
 }
 
 func (db *Data) AddWorkspace(name string) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
 
 	if db.workspaceExists(name) {
 		return errors.New("workspace already exists")
@@ -61,10 +77,8 @@ func (db *Data) AddWorkspace(name string) error {
 
 	db.Workspaces[w.ID] = w
 
-	// Persist to disk
 	if db.store != nil {
 		if err := db.store.SaveWorkspace(w); err != nil {
-			// Rollback in-memory change on persistence failure
 			delete(db.Workspaces, w.ID)
 			return err
 		}
@@ -74,17 +88,17 @@ func (db *Data) AddWorkspace(name string) error {
 }
 
 func (db *Data) workspaceExists(name string) bool {
-	// Ensure there are no name collisions
 	for _, w := range db.Workspaces {
 		if w.Name == name {
 			return true
 		}
 	}
-
 	return false
 }
 
 func (db *Data) RemoveWorkspace(name string) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
 
 	var targetID ksuid.KSUID
 	var found bool
@@ -101,10 +115,8 @@ func (db *Data) RemoveWorkspace(name string) error {
 		return errors.New("workspace not found")
 	}
 
-	// Remove from memory
 	delete(db.Workspaces, targetID)
 
-	// Persist to disk
 	if db.store != nil {
 		if err := db.store.DeleteWorkspace(targetID); err != nil {
 			return err
@@ -114,7 +126,21 @@ func (db *Data) RemoveWorkspace(name string) error {
 	return nil
 }
 
+func (db *Data) ListWorkspaces() []Workspace {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	ws := make([]Workspace, 0, len(db.Workspaces))
+	for _, w := range db.Workspaces {
+		ws = append(ws, *w)
+	}
+	return ws
+}
+
 func (db *Data) AddCatalog(name string) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
 	if db.catalogExists(name) {
 		return errors.New("catalog already exists")
 	}
@@ -126,10 +152,8 @@ func (db *Data) AddCatalog(name string) error {
 
 	db.Catalogs[c.ID] = c
 
-	// Persist to disk
 	if db.store != nil {
 		if err := db.store.SaveCatalog(c); err != nil {
-			// Rollback in-memory change on persistence failure
 			delete(db.Catalogs, c.ID)
 			return err
 		}
@@ -148,6 +172,8 @@ func (db *Data) catalogExists(name string) bool {
 }
 
 func (db *Data) RemoveCatalog(name string) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
 
 	var targetID ksuid.KSUID
 	var found bool
@@ -164,10 +190,8 @@ func (db *Data) RemoveCatalog(name string) error {
 		return errors.New("catalog not found")
 	}
 
-	// Remove from memory
 	delete(db.Catalogs, targetID)
 
-	// Persist to disk
 	if db.store != nil {
 		if err := db.store.DeleteCatalog(targetID); err != nil {
 			return err
@@ -178,6 +202,9 @@ func (db *Data) RemoveCatalog(name string) error {
 }
 
 func (db *Data) ListCatalogs() ([]Catalog, error) {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
 	cs := make([]Catalog, 0, len(db.Catalogs))
 	for _, c := range db.Catalogs {
 		cs = append(cs, *c)
@@ -186,6 +213,9 @@ func (db *Data) ListCatalogs() ([]Catalog, error) {
 }
 
 func (db *Data) AddAgent(catalogID ksuid.KSUID, name string) (*Agent, error) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
 	catalog, ok := db.Catalogs[catalogID]
 	if !ok {
 		return nil, errors.New("catalog not found")
@@ -199,10 +229,14 @@ func (db *Data) AddAgent(catalogID ksuid.KSUID, name string) (*Agent, error) {
 	}
 
 	catalog.AddAgent(a)
+	db.agentIndex[a.ID] = a
+	db.agentCatalog[a.ID] = catalog
 
 	if db.store != nil {
 		if err := db.store.SaveCatalog(catalog); err != nil {
 			catalog.Agents = catalog.Agents[:len(catalog.Agents)-1]
+			delete(db.agentIndex, a.ID)
+			delete(db.agentCatalog, a.ID)
 			return nil, err
 		}
 	}
@@ -211,6 +245,9 @@ func (db *Data) AddAgent(catalogID ksuid.KSUID, name string) (*Agent, error) {
 }
 
 func (db *Data) RegisterExternalAgent(catalogID ksuid.KSUID, name, instructions string) (*Agent, error) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
 	catalog, ok := db.Catalogs[catalogID]
 	if !ok {
 		return nil, errors.New("catalog not found")
@@ -224,10 +261,14 @@ func (db *Data) RegisterExternalAgent(catalogID ksuid.KSUID, name, instructions 
 	}
 
 	catalog.AddAgent(a)
+	db.agentIndex[a.ID] = a
+	db.agentCatalog[a.ID] = catalog
 
 	if db.store != nil {
 		if err := db.store.SaveCatalog(catalog); err != nil {
 			catalog.Agents = catalog.Agents[:len(catalog.Agents)-1]
+			delete(db.agentIndex, a.ID)
+			delete(db.agentCatalog, a.ID)
 			return nil, err
 		}
 	}
@@ -236,18 +277,41 @@ func (db *Data) RegisterExternalAgent(catalogID ksuid.KSUID, name, instructions 
 }
 
 func (db *Data) FindAgent(agentID ksuid.KSUID) (*Agent, *Catalog, error) {
-	for _, catalog := range db.Catalogs {
-		for _, agent := range catalog.Agents {
-			if agent.ID == agentID {
-				return agent, catalog, nil
-			}
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	return db.findAgent(agentID)
+}
+
+// RemoveAgent deletes an agent from its catalog and from the agent index.
+func (db *Data) RemoveAgent(agentID ksuid.KSUID) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	agent, catalog, err := db.findAgent(agentID)
+	if err != nil {
+		return err
+	}
+
+	for i, a := range catalog.Agents {
+		if a.ID == agent.ID {
+			catalog.Agents = append(catalog.Agents[:i], catalog.Agents[i+1:]...)
+			break
 		}
 	}
-	return nil, nil, errors.New("agent not found")
+	delete(db.agentIndex, agentID)
+	delete(db.agentCatalog, agentID)
+
+	if db.store != nil {
+		return db.store.SaveCatalog(catalog)
+	}
+	return nil
 }
 
 func (db *Data) SetAgentInstructions(agentID ksuid.KSUID, instructions string) error {
-	agent, catalog, err := db.FindAgent(agentID)
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	agent, catalog, err := db.findAgent(agentID)
 	if err != nil {
 		return err
 	}
@@ -259,7 +323,10 @@ func (db *Data) SetAgentInstructions(agentID ksuid.KSUID, instructions string) e
 }
 
 func (db *Data) SetAgentModel(agentID ksuid.KSUID, model string) error {
-	agent, catalog, err := db.FindAgent(agentID)
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	agent, catalog, err := db.findAgent(agentID)
 	if err != nil {
 		return err
 	}
@@ -271,7 +338,10 @@ func (db *Data) SetAgentModel(agentID ksuid.KSUID, model string) error {
 }
 
 func (db *Data) AddAgentTool(agentID ksuid.KSUID, toolName string) error {
-	agent, catalog, err := db.FindAgent(agentID)
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	agent, catalog, err := db.findAgent(agentID)
 	if err != nil {
 		return err
 	}
@@ -288,7 +358,10 @@ func (db *Data) AddAgentTool(agentID ksuid.KSUID, toolName string) error {
 }
 
 func (db *Data) RemoveAgentTool(agentID ksuid.KSUID, toolName string) error {
-	agent, catalog, err := db.FindAgent(agentID)
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	agent, catalog, err := db.findAgent(agentID)
 	if err != nil {
 		return err
 	}
@@ -310,6 +383,9 @@ func (db *Data) RemoveAgentTool(agentID ksuid.KSUID, toolName string) error {
 }
 
 func (db *Data) NewThread(workspaceID ksuid.KSUID, name string) (*Thread, error) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
 	if _, ok := db.Workspaces[workspaceID]; !ok {
 		return nil, errors.New("workspace not found")
 	}
@@ -336,7 +412,41 @@ func (db *Data) NewThread(workspaceID ksuid.KSUID, name string) (*Thread, error)
 	return t, nil
 }
 
+// NewAgentThread creates a Thread bound directly to a specific agent (agent-direct routing).
+func (db *Data) NewAgentThread(agentID ksuid.KSUID, name string) (*Thread, error) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	if _, _, err := db.findAgent(agentID); err != nil {
+		return nil, errors.New("agent not found")
+	}
+
+	now := time.Now().UTC()
+	t := &Thread{
+		ID:        ksuid.New(),
+		AgentID:   agentID,
+		Name:      name,
+		State:     ThreadActive,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	db.Threads[t.ID] = t
+
+	if db.store != nil {
+		if err := db.store.SaveThread(t); err != nil {
+			delete(db.Threads, t.ID)
+			return nil, err
+		}
+	}
+
+	return t, nil
+}
+
 func (db *Data) GetThread(id ksuid.KSUID) (*Thread, error) {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
 	t, ok := db.Threads[id]
 	if !ok {
 		return nil, errors.New("thread not found")
@@ -344,7 +454,16 @@ func (db *Data) GetThread(id ksuid.KSUID) (*Thread, error) {
 	return t, nil
 }
 
+// GetAgentThread is an alias for GetThread — agent-direct threads are now
+// stored in the unified Threads map.
+func (db *Data) GetAgentThread(id ksuid.KSUID) (*Thread, error) {
+	return db.GetThread(id)
+}
+
 func (db *Data) DeleteThread(id ksuid.KSUID) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
 	if _, ok := db.Threads[id]; !ok {
 		return errors.New("thread not found")
 	}
@@ -358,6 +477,9 @@ func (db *Data) DeleteThread(id ksuid.KSUID) error {
 }
 
 func (db *Data) AppendMessage(threadID ksuid.KSUID, msg llm.Message) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
 	thread, ok := db.Threads[threadID]
 	if !ok {
 		return errors.New("thread not found")
@@ -371,7 +493,16 @@ func (db *Data) AppendMessage(threadID ksuid.KSUID, msg llm.Message) error {
 	return nil
 }
 
+// AppendAgentMessage is an alias for AppendMessage — agent-direct threads now
+// use the unified message log.
+func (db *Data) AppendAgentMessage(threadID ksuid.KSUID, msg llm.Message) error {
+	return db.AppendMessage(threadID, msg)
+}
+
 func (db *Data) ListThreads(workspaceID ksuid.KSUID) ([]*Thread, error) {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
 	if _, ok := db.Workspaces[workspaceID]; !ok {
 		return nil, errors.New("workspace not found")
 	}
@@ -384,60 +515,15 @@ func (db *Data) ListThreads(workspaceID ksuid.KSUID) ([]*Thread, error) {
 	return ts, nil
 }
 
-func (db *Data) NewAgentThread(agentID ksuid.KSUID, name string) (*AgentThread, error) {
-	if _, _, err := db.FindAgent(agentID); err != nil {
+func (db *Data) ListAgentThreads(agentID ksuid.KSUID) ([]*Thread, error) {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	if _, _, err := db.findAgent(agentID); err != nil {
 		return nil, errors.New("agent not found")
 	}
-
-	now := time.Now().UTC()
-	t := &AgentThread{
-		ID:        ksuid.New(),
-		AgentID:   agentID,
-		Name:      name,
-		State:     ThreadActive,
-		CreatedAt: now,
-		UpdatedAt: now,
-	}
-
-	db.AgentThreads[t.ID] = t
-
-	if db.store != nil {
-		if err := db.store.SaveAgentThread(t); err != nil {
-			delete(db.AgentThreads, t.ID)
-			return nil, err
-		}
-	}
-
-	return t, nil
-}
-
-func (db *Data) GetAgentThread(id ksuid.KSUID) (*AgentThread, error) {
-	t, ok := db.AgentThreads[id]
-	if !ok {
-		return nil, errors.New("agent thread not found")
-	}
-	return t, nil
-}
-
-func (db *Data) DeleteAgentThread(id ksuid.KSUID) error {
-	if _, ok := db.AgentThreads[id]; !ok {
-		return errors.New("agent thread not found")
-	}
-
-	delete(db.AgentThreads, id)
-
-	if db.store != nil {
-		return db.store.DeleteAgentThread(id)
-	}
-	return nil
-}
-
-func (db *Data) ListAgentThreads(agentID ksuid.KSUID) ([]*AgentThread, error) {
-	if _, _, err := db.FindAgent(agentID); err != nil {
-		return nil, errors.New("agent not found")
-	}
-	var ts []*AgentThread
-	for _, t := range db.AgentThreads {
+	var ts []*Thread
+	for _, t := range db.Threads {
 		if t.AgentID == agentID {
 			ts = append(ts, t)
 		}
@@ -445,21 +531,10 @@ func (db *Data) ListAgentThreads(agentID ksuid.KSUID) ([]*AgentThread, error) {
 	return ts, nil
 }
 
-func (db *Data) AppendAgentMessage(threadID ksuid.KSUID, msg llm.Message) error {
-	thread, ok := db.AgentThreads[threadID]
-	if !ok {
-		return errors.New("agent thread not found")
-	}
-
-	thread.Messages = append(thread.Messages, msg)
-
-	if db.store != nil {
-		return db.store.AppendAgentMessage(threadID, msg)
-	}
-	return nil
-}
-
 func (db *Data) GetWorkspace(id ksuid.KSUID) (*Workspace, error) {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
 	w, ok := db.Workspaces[id]
 	if !ok {
 		return nil, errors.New("workspace not found")
@@ -468,6 +543,9 @@ func (db *Data) GetWorkspace(id ksuid.KSUID) (*Workspace, error) {
 }
 
 func (db *Data) GetCatalog(id ksuid.KSUID) (*Catalog, error) {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
 	c, ok := db.Catalogs[id]
 	if !ok {
 		return nil, errors.New("catalog not found")
@@ -476,6 +554,9 @@ func (db *Data) GetCatalog(id ksuid.KSUID) (*Catalog, error) {
 }
 
 func (db *Data) SetWorkspaceCatalog(workspaceID, catalogID ksuid.KSUID) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
 	workspace, ok := db.Workspaces[workspaceID]
 	if !ok {
 		return errors.New("workspace not found")
@@ -491,11 +572,14 @@ func (db *Data) SetWorkspaceCatalog(workspaceID, catalogID ksuid.KSUID) error {
 }
 
 func (db *Data) SetWorkspaceRouter(workspaceID, agentID ksuid.KSUID) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
 	workspace, ok := db.Workspaces[workspaceID]
 	if !ok {
 		return errors.New("workspace not found")
 	}
-	if _, _, err := db.FindAgent(agentID); err != nil {
+	if _, _, err := db.findAgent(agentID); err != nil {
 		return errors.New("agent not found")
 	}
 	if workspace.Config == nil {
@@ -509,6 +593,9 @@ func (db *Data) SetWorkspaceRouter(workspaceID, agentID ksuid.KSUID) error {
 }
 
 func (db *Data) NewPipeline(workspaceID ksuid.KSUID, name string) (*Pipeline, error) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
 	if _, ok := db.Workspaces[workspaceID]; !ok {
 		return nil, errors.New("workspace not found")
 	}
@@ -528,6 +615,9 @@ func (db *Data) NewPipeline(workspaceID ksuid.KSUID, name string) (*Pipeline, er
 }
 
 func (db *Data) GetPipeline(id ksuid.KSUID) (*Pipeline, error) {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
 	p, ok := db.Pipelines[id]
 	if !ok {
 		return nil, errors.New("pipeline not found")
@@ -536,6 +626,9 @@ func (db *Data) GetPipeline(id ksuid.KSUID) (*Pipeline, error) {
 }
 
 func (db *Data) RemovePipeline(id ksuid.KSUID) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
 	if _, ok := db.Pipelines[id]; !ok {
 		return errors.New("pipeline not found")
 	}
@@ -547,11 +640,14 @@ func (db *Data) RemovePipeline(id ksuid.KSUID) error {
 }
 
 func (db *Data) AddPipelineStep(pipelineID, agentID ksuid.KSUID, mode StepMode) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
 	pipeline, ok := db.Pipelines[pipelineID]
 	if !ok {
 		return errors.New("pipeline not found")
 	}
-	if _, _, err := db.FindAgent(agentID); err != nil {
+	if _, _, err := db.findAgent(agentID); err != nil {
 		return errors.New("agent not found")
 	}
 	pipeline.Steps = append(pipeline.Steps, PipelineStep{
@@ -565,6 +661,9 @@ func (db *Data) AddPipelineStep(pipelineID, agentID ksuid.KSUID, mode StepMode) 
 }
 
 func (db *Data) ListPipelines(workspaceID ksuid.KSUID) ([]*Pipeline, error) {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
 	if _, ok := db.Workspaces[workspaceID]; !ok {
 		return nil, errors.New("workspace not found")
 	}
@@ -578,6 +677,9 @@ func (db *Data) ListPipelines(workspaceID ksuid.KSUID) ([]*Pipeline, error) {
 }
 
 func (db *Data) CreateJob(jobType string, workspaceID, pipelineID ksuid.KSUID, input string) (*Job, error) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
 	job := &Job{
 		ID:          ksuid.New(),
 		Type:        jobType,
@@ -592,6 +694,9 @@ func (db *Data) CreateJob(jobType string, workspaceID, pipelineID ksuid.KSUID, i
 }
 
 func (db *Data) SetJobCancel(id ksuid.KSUID, cancel context.CancelFunc) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
 	job, ok := db.Jobs[id]
 	if !ok {
 		return errors.New("job not found")
@@ -601,6 +706,9 @@ func (db *Data) SetJobCancel(id ksuid.KSUID, cancel context.CancelFunc) error {
 }
 
 func (db *Data) CancelJob(id ksuid.KSUID) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
 	job, ok := db.Jobs[id]
 	if !ok {
 		return errors.New("job not found")
@@ -612,6 +720,9 @@ func (db *Data) CancelJob(id ksuid.KSUID) error {
 }
 
 func (db *Data) ListJobs(workspaceID ksuid.KSUID) ([]*Job, error) {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
 	var jobs []*Job
 	for _, j := range db.Jobs {
 		if workspaceID == (ksuid.KSUID{}) || j.WorkspaceID == workspaceID {
@@ -622,6 +733,9 @@ func (db *Data) ListJobs(workspaceID ksuid.KSUID) ([]*Job, error) {
 }
 
 func (db *Data) GetJob(id ksuid.KSUID) (*Job, error) {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
 	job, ok := db.Jobs[id]
 	if !ok {
 		return nil, errors.New("job not found")
@@ -630,6 +744,9 @@ func (db *Data) GetJob(id ksuid.KSUID) (*Job, error) {
 }
 
 func (db *Data) UpdateJob(id ksuid.KSUID, status JobStatus, result, errMsg string) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
 	job, ok := db.Jobs[id]
 	if !ok {
 		return errors.New("job not found")

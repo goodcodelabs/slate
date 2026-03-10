@@ -61,11 +61,11 @@ func mustContain(s, sub string) error {
 	return nil
 }
 
-// validJSON asserts that s parses as JSON.
-func validJSON(s string) error {
+// validJSON asserts that raw parses as JSON.
+func validJSON(raw json.RawMessage) error {
 	var v interface{}
-	if err := json.Unmarshal([]byte(s), &v); err != nil {
-		return fmt.Errorf("invalid JSON: %w (got %q)", err, s)
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return fmt.Errorf("invalid JSON: %w (got %q)", err, string(raw))
 	}
 	return nil
 }
@@ -102,11 +102,7 @@ func testHealth(s *suite) {
 	s.section("Health")
 
 	s.run("health returns ok", func() error {
-		resp, err := s.c.Health()
-		if err != nil {
-			return err
-		}
-		return mustContain(resp, "ok")
+		return s.c.Health()
 	})
 }
 
@@ -299,11 +295,11 @@ func testAgentThreads(s *suite) {
 
 	if threadID != "" {
 		s.run("agent thread history is initially empty", func() error {
-			resp, err := s.c.AgentThreadHistory(threadID)
+			raw, err := s.c.AgentThreadHistory(threadID)
 			if err != nil {
 				return err
 			}
-			return mustContain(resp, "messages")
+			return mustContain(string(raw), "messages")
 		})
 	}
 

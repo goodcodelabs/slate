@@ -559,8 +559,8 @@ func TestDeleteAgentThread(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAgentThread: %v", err)
 	}
-	if err := db.DeleteAgentThread(thread.ID); err != nil {
-		t.Fatalf("DeleteAgentThread: %v", err)
+	if err := db.DeleteThread(thread.ID); err != nil {
+		t.Fatalf("DeleteThread: %v", err)
 	}
 	if _, err := db.GetAgentThread(thread.ID); err == nil {
 		t.Error("expected error after delete, got nil")

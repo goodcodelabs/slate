@@ -15,7 +15,7 @@ type SystemMetricsCommand struct {
 	metrics *metrics.Metrics
 }
 
-func (c *SystemMetricsCommand) Execute(_ Context, _ []string) (*Response, error) {
+func (c *SystemMetricsCommand) Execute(_ Context, _ json.RawMessage) (*Response, error) {
 	snap := c.metrics.Snapshot()
 	out, _ := json.Marshal(snap)
 	return &Response{Message: string(out)}, nil
@@ -28,8 +28,7 @@ type SystemStatsCommand struct {
 	metrics *metrics.Metrics
 }
 
-func (c *SystemStatsCommand) Execute(_ Context, _ []string) (*Response, error) {
-	// Count jobs by status.
+func (c *SystemStatsCommand) Execute(_ Context, _ json.RawMessage) (*Response, error) {
 	jobCounts := map[string]int{
 		"pending":   0,
 		"running":   0,
@@ -55,18 +54,24 @@ func (c *SystemStatsCommand) Execute(_ Context, _ []string) (*Response, error) {
 	return &Response{Message: string(out)}, nil
 }
 
-// ListJobsCommand handles: ls_jobs [workspace_id]
+// ListJobsCommand handles: ls_jobs
 type ListJobsCommand struct {
 	store *data.Data
 }
 
-func (c *ListJobsCommand) Execute(_ Context, params []string) (*Response, error) {
+func (c *ListJobsCommand) Execute(_ Context, params json.RawMessage) (*Response, error) {
+	var p struct {
+		WorkspaceID string `json:"workspace_id"`
+	}
+	// workspace_id is optional; ignore unmarshal errors for empty params
+	_ = json.Unmarshal(params, &p)
+
 	var wsID ksuid.KSUID
-	if len(params) > 0 {
+	if p.WorkspaceID != "" {
 		var err error
-		wsID, err = ksuid.Parse(params[0])
+		wsID, err = ksuid.Parse(p.WorkspaceID)
 		if err != nil {
-			return nil, fmt.Errorf("invalid workspace_id: %w", err)
+			return nil, errorResponse("invalid workspace_id")
 		}
 	}
 
@@ -107,21 +112,28 @@ func (c *ListJobsCommand) Execute(_ Context, params []string) (*Response, error)
 	return &Response{Message: string(out)}, nil
 }
 
-// CancelJobCommand handles: cancel_job <job_id>
+// CancelJobCommand handles: cancel_job
 type CancelJobCommand struct {
 	store *data.Data
 }
 
-func (c *CancelJobCommand) Execute(_ Context, params []string) (*Response, error) {
-	if len(params) < 1 {
-		return nil, fmt.Errorf("usage: cancel_job <job_id>")
+func (c *CancelJobCommand) Execute(_ Context, params json.RawMessage) (*Response, error) {
+	var p struct {
+		JobID string `json:"job_id"`
 	}
-	jobID, err := ksuid.Parse(params[0])
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, errorResponse("invalid params")
+	}
+	jobID, err := ksuid.Parse(p.JobID)
 	if err != nil {
-		return nil, fmt.Errorf("invalid job_id: %w", err)
+		return nil, errorResponse("invalid job_id")
 	}
 	if err := c.store.CancelJob(jobID); err != nil {
 		return nil, err
 	}
 	return &Response{Message: "ok"}, nil
+}
+
+func errorResponse(msg string) error {
+	return fmt.Errorf("%s", msg)
 }

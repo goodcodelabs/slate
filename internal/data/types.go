@@ -2,6 +2,7 @@ package data
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/segmentio/ksuid"
@@ -9,59 +10,27 @@ import (
 )
 
 type Data struct {
-	Workspaces   map[ksuid.KSUID]*Workspace    `msgpack:"workspaces"`
-	Catalogs     map[ksuid.KSUID]*Catalog      `msgpack:"catalogs"`
-	Threads      map[ksuid.KSUID]*Thread       `msgpack:"-"`
-	AgentThreads map[ksuid.KSUID]*AgentThread  `msgpack:"-"`
-	Pipelines    map[ksuid.KSUID]*Pipeline     `msgpack:"-"`
-	Jobs         map[ksuid.KSUID]*Job          `msgpack:"-"`
-	store        Store                         `msgpack:"-"`
-}
+	Workspaces map[ksuid.KSUID]*Workspace `msgpack:"workspaces"`
+	Catalogs   map[ksuid.KSUID]*Catalog   `msgpack:"catalogs"`
+	Threads    map[ksuid.KSUID]*Thread    `msgpack:"-"`
+	Pipelines  map[ksuid.KSUID]*Pipeline  `msgpack:"-"`
+	Jobs       map[ksuid.KSUID]*Job       `msgpack:"-"`
 
-type Metadata struct {
-	Name string `msgpack:"name"`
-}
-
-type SystemConfiguration struct {
-}
-
-type System struct {
-	Databases     []*Metadata         `msgpack:"databases"`
-	Configuration SystemConfiguration `msgpack:"configuration"`
-}
-
-type RouterAgentConfig struct {
-	Instructions string `msgpack:"instructions"`
-}
-
-type AgentReference struct {
-	CatalogId ksuid.KSUID `msgpack:"catalog_id"`
-	AgentId   ksuid.KSUID `msgpack:"agent_id"`
-}
-
-type AgentRegistry struct {
-	Agents []AgentReference `msgpack:"agents"`
+	mu           sync.RWMutex             `msgpack:"-"`
+	agentIndex   map[ksuid.KSUID]*Agent   `msgpack:"-"` // agentID → agent (O(1) lookup)
+	agentCatalog map[ksuid.KSUID]*Catalog `msgpack:"-"` // agentID → owning catalog
+	store        Store                    `msgpack:"-"`
 }
 
 type WorkspaceConfig struct {
-	RouterAgentConfig RouterAgentConfig `msgpack:"router_agent_config"`
-	RouterAgentID     ksuid.KSUID       `msgpack:"router_agent_id"`
+	RouterAgentID ksuid.KSUID `msgpack:"router_agent_id"`
 }
-
-type Chat struct {
-}
-
-type WorkspaceState struct{}
 
 type Workspace struct {
-	ID        ksuid.KSUID `msgpack:"id"`
-	Name      string      `msgpack:"name"`
-	CatalogID ksuid.KSUID `msgpack:"catalog_id"`
-
-	Config *WorkspaceConfig `msgpack:"config"`
-
-	State *WorkspaceState  `msgpack:"state"` // Need to abstract this to it's own type
-	Chats map[string]*Chat `msgpack:"chats"`
+	ID        ksuid.KSUID      `msgpack:"id"`
+	Name      string           `msgpack:"name"`
+	CatalogID ksuid.KSUID      `msgpack:"catalog_id"`
+	Config    *WorkspaceConfig `msgpack:"config"`
 }
 
 type ThreadState string
@@ -72,32 +41,17 @@ const (
 	ThreadError     ThreadState = "error"
 )
 
-// Thread is a persistent multi-turn conversation tied to a workspace.
-// Routing is handled by the workspace's router agent at chat time.
-// Metadata is stored in a msgpack snapshot; message history is stored in a
-// separate per-thread append log (see FileStore).
+// Thread is a persistent multi-turn conversation. If AgentID is non-zero the
+// thread routes directly to that agent; otherwise routing goes through the
+// workspace's router agent.
 type Thread struct {
-	ID          ksuid.KSUID `msgpack:"id"`
-	WorkspaceID ksuid.KSUID `msgpack:"workspace_id"`
-	Name        string      `msgpack:"name"`
-	State       ThreadState `msgpack:"state"`
-	CreatedAt   time.Time   `msgpack:"created_at"`
-	UpdatedAt   time.Time   `msgpack:"updated_at"`
-
-	// Messages are loaded from the per-thread log, not serialized in the snapshot.
-	Messages []llm.Message `msgpack:"-"`
-}
-
-// AgentThread is a persistent multi-turn conversation bound directly to a specific agent.
-// Unlike workspace threads, routing is always to the bound agent — no workspace router involved.
-// Metadata is stored in a msgpack snapshot; message history is stored in a separate log.
-type AgentThread struct {
-	ID        ksuid.KSUID   `msgpack:"id"`
-	AgentID   ksuid.KSUID   `msgpack:"agent_id"`
-	Name      string        `msgpack:"name"`
-	State     ThreadState   `msgpack:"state"`
-	CreatedAt time.Time     `msgpack:"created_at"`
-	UpdatedAt time.Time     `msgpack:"updated_at"`
+	ID          ksuid.KSUID   `msgpack:"id"`
+	WorkspaceID ksuid.KSUID   `msgpack:"workspace_id"`
+	AgentID     ksuid.KSUID   `msgpack:"agent_id"` // non-zero = agent-direct thread
+	Name        string        `msgpack:"name"`
+	State       ThreadState   `msgpack:"state"`
+	CreatedAt   time.Time     `msgpack:"created_at"`
+	UpdatedAt   time.Time     `msgpack:"updated_at"`
 
 	// Messages are loaded from the per-thread log, not serialized in the snapshot.
 	Messages []llm.Message `msgpack:"-"`
@@ -157,19 +111,31 @@ const (
 // Job represents an asynchronous unit of work (e.g., a pipeline run, a chat turn).
 // Jobs are ephemeral — they live in memory and are not reloaded after restart.
 type Job struct {
-	ID          ksuid.KSUID `msgpack:"id"`
-	Type        string      `msgpack:"type"`
-	WorkspaceID ksuid.KSUID `msgpack:"workspace_id"`
-	PipelineID  ksuid.KSUID `msgpack:"pipeline_id"`
-	ThreadID    ksuid.KSUID `msgpack:"thread_id"` // zero for non-thread jobs
-	Input       string      `msgpack:"input"`
-	Status      JobStatus   `msgpack:"status"`
-	Result      string      `msgpack:"result"`
-	Error       string      `msgpack:"error"`
-	CreatedAt   time.Time   `msgpack:"created_at"`
-	StartedAt   time.Time   `msgpack:"started_at"`
-	CompletedAt time.Time   `msgpack:"completed_at"`
+	ID          ksuid.KSUID        `msgpack:"id"`
+	Type        string             `msgpack:"type"`
+	WorkspaceID ksuid.KSUID        `msgpack:"workspace_id"`
+	PipelineID  ksuid.KSUID        `msgpack:"pipeline_id"`
+	ThreadID    ksuid.KSUID        `msgpack:"thread_id"`
+	Input       string             `msgpack:"input"`
+	Status      JobStatus          `msgpack:"status"`
+	Result      string             `msgpack:"result"`
+	Error       string             `msgpack:"error"`
+	CreatedAt   time.Time          `msgpack:"created_at"`
+	StartedAt   time.Time          `msgpack:"started_at"`
+	CompletedAt time.Time          `msgpack:"completed_at"`
 
 	// CancelFunc cancels the job's context. Not persisted.
 	CancelFunc context.CancelFunc `msgpack:"-"`
+}
+
+// AgentThread is retained for backward-compatible loading of pre-migration
+// snapshot files. New agent-direct threads are stored as Thread with AgentID set.
+type AgentThread struct {
+	ID        ksuid.KSUID   `msgpack:"id"`
+	AgentID   ksuid.KSUID   `msgpack:"agent_id"`
+	Name      string        `msgpack:"name"`
+	State     ThreadState   `msgpack:"state"`
+	CreatedAt time.Time     `msgpack:"created_at"`
+	UpdatedAt time.Time     `msgpack:"updated_at"`
+	Messages  []llm.Message `msgpack:"-"`
 }
