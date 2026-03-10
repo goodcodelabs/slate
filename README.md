@@ -11,7 +11,7 @@ Slate is built around a small set of core primitives:
 | **Workspace** | Isolation boundary. Groups a catalog, router agent, threads, and pipelines. |
 | **Catalog** | Registry of agent definitions available to a workspace. |
 | **Agent** | An LLM-backed actor with instructions, a model, and optional tools. |
-| **Thread** | A persistent multi-turn conversation tied to a workspace and agent. |
+| **Thread** | A persistent multi-turn conversation. Workspace threads route through a router agent; agent threads are bound directly to a single agent. |
 | **Pipeline** | An ordered sequence of agent steps (sequential or parallel). |
 | **Job** | An async unit of work created when a pipeline is run. |
 
@@ -19,7 +19,7 @@ Slate is built around a small set of core primitives:
 
 ```
 TCP Client
-    │  line-oriented protocol (space-separated tokens, \n terminated)
+    │  newline-delimited JSON protocol
     ▼
 connection.Handler
     │  parses request, dispatches via scheduler
@@ -58,106 +58,128 @@ Commands are executed by a worker pool (default 4 goroutines). Long-running comm
 
 ## Protocol
 
-The wire protocol is line-oriented:
+The wire protocol is newline-delimited JSON:
 
-- **Request**: space-separated tokens followed by `\n`. First token is the command name (case-insensitive). Remaining tokens are parameters.
-- **Response**: a single line followed by `\n`. Errors are prefixed with `error|`.
+- **Request**: `{"cmd":"<name>","params":{...}}\n` (cmd is case-insensitive)
+- **Response (success)**: `{"ok":true,"data":{...}}\n` or `{"ok":true}\n`
+- **Response (error)**: `{"ok":false,"error":"<message>"}\n`
 
 ```
-→ health\n
-← ok\n
+→ {"cmd":"health"}\n
+← {"ok":true}\n
 
-→ add_workspace my-project\n
-← ok\n
+→ {"cmd":"add_workspace","params":{"name":"my-project"}}\n
+← {"ok":true}\n
 
-→ add_catalog agents\n
-← ok\n
+→ {"cmd":"add_catalog","params":{"name":"agents"}}\n
+← {"ok":true}\n
 
-→ ls_catalogs\n
-← {"catalogs":[{"id":"...","name":"agents"}]}\n
+→ {"cmd":"ls_catalogs"}\n
+← {"ok":true,"data":{"catalogs":[{"id":"...","name":"agents"}]}}\n
 
-→ add_agent <catalog_id> summarizer\n
-← {"id":"...","name":"summarizer"}\n
+→ {"cmd":"add_agent","params":{"catalog_id":"<id>","name":"summarizer"}}\n
+← {"ok":true,"data":{"id":"...","name":"summarizer"}}\n
 ```
 
 ## Commands
 
+All params and responses are JSON objects. The tables below show the `params` fields and the `data` field of a successful response.
+
 ### Workspace
 
-| Command | Params | Response |
-|---------|--------|----------|
-| `add_workspace` | `<name>` | `ok` |
-| `del_workspace` | `<name>` | `ok` |
-| `set_workspace_catalog` | `<workspace_id> <catalog_id>` | `ok` |
-| `set_workspace_router` | `<workspace_id> <agent_id>` | `ok` |
-| `workspace_chat` | `<workspace_id> <message...>` | assistant reply |
+| Command | Params | Response data |
+|---------|--------|---------------|
+| `ls_workspaces` | — | `{"workspaces":[...]}` |
+| `add_workspace` | `{"name":"..."}` | — |
+| `del_workspace` | `{"name":"..."}` | — |
+| `set_workspace_catalog` | `{"workspace_id":"...","catalog_id":"..."}` | — |
+| `set_workspace_router` | `{"workspace_id":"...","agent_id":"..."}` | — |
 
 ### Catalog
 
-| Command | Params | Response |
-|---------|--------|----------|
-| `add_catalog` | `<name>` | `ok` |
-| `del_catalog` | `<name>` | `ok` |
-| `ls_catalogs` | — | `{"catalogs":[...]}` |
+| Command | Params | Response data |
+|---------|--------|---------------|
+| `add_catalog` | `{"name":"..."}` | — |
+| `del_catalog` | `{"name":"..."}` | — |
+| `ls_catalogs` | — | `{"catalogs":[{"id":"...","name":"..."},...]}` |
 
 ### Agent
 
-| Command | Params | Response |
-|---------|--------|----------|
-| `add_agent` | `<catalog_id> <name>` | `{"id":"...","name":"..."}` |
-| `set_agent_instructions` | `<agent_id> <instructions...>` | `ok` |
-| `set_agent_model` | `<agent_id> <model>` | `ok` |
-| `run_agent` | `<agent_id> <input...>` | assistant reply |
+| Command | Params | Response data |
+|---------|--------|---------------|
+| `add_agent` | `{"catalog_id":"...","name":"..."}` | `{"id":"...","name":"..."}` |
+| `del_agent` | `{"agent_id":"..."}` | — |
+| `set_agent_instructions` | `{"agent_id":"...","instructions":"..."}` | — |
+| `set_agent_model` | `{"agent_id":"...","model":"..."}` | — |
+| `run_agent` | `{"agent_id":"...","input":"..."}` | `{"job_id":"..."}` |
 
 ### Tools
 
-| Command | Params | Response |
-|---------|--------|----------|
-| `add_tool` | `<agent_id> <tool_name>` | `ok` |
-| `remove_tool` | `<agent_id> <tool_name>` | `ok` |
-| `ls_tools` | `<agent_id>` | `{"tools":["..."]}` |
+| Command | Params | Response data |
+|---------|--------|---------------|
+| `add_tool` | `{"agent_id":"...","tool":"<name>"}` | — |
+| `remove_tool` | `{"agent_id":"...","tool":"<name>"}` | — |
+| `ls_tools` | `{"agent_id":"..."}` | `{"tools":["..."]}` |
 
-### Threads
+### Workspace Threads
 
-| Command | Params | Response |
-|---------|--------|----------|
-| `new_thread` | `<workspace_id> <agent_id> [name]` | `{"id":"...","name":"..."}` |
-| `chat` | `<thread_id> <message...>` | assistant reply |
-| `ls_threads` | `<workspace_id>` | `{"threads":[...]}` |
-| `thread_history` | `<thread_id>` | `{"messages":[...]}` |
+Persistent multi-turn conversations routed through the workspace's router agent.
+
+| Command | Params | Response data |
+|---------|--------|---------------|
+| `new_thread` | `{"workspace_id":"...","name":"..."}` | `{"id":"...","name":"..."}` |
+| `chat` | `{"thread_id":"...","message":"..."}` | `{"job_id":"..."}` |
+| `ls_threads` | `{"workspace_id":"..."}` | `{"threads":[...]}` |
+| `thread_history` | `{"thread_id":"..."}` | `{"messages":[...]}` |
+
+### Agent Threads
+
+Persistent multi-turn conversations bound directly to a single agent (no workspace or routing required).
+
+| Command | Params | Response data |
+|---------|--------|---------------|
+| `new_agent_thread` | `{"agent_id":"...","name":"..."}` | `{"id":"...","name":"..."}` |
+| `agent_chat` | `{"thread_id":"...","message":"..."}` | `{"job_id":"..."}` |
+| `ls_agent_threads` | `{"agent_id":"..."}` | `{"threads":[...]}` |
+| `agent_thread_history` | `{"thread_id":"..."}` | `{"messages":[...]}` |
 
 ### Pipelines
 
-| Command | Params | Response |
-|---------|--------|----------|
-| `create_pipeline` | `<workspace_id> <name>` | `{"pipeline_id":"..."}` |
-| `add_pipeline_step` | `<pipeline_id> <agent_id> <sequential\|parallel>` | `ok` |
-| `run_pipeline` | `<pipeline_id> <input...>` | `{"job_id":"..."}` |
+| Command | Params | Response data |
+|---------|--------|---------------|
+| `create_pipeline` | `{"workspace_id":"...","name":"..."}` | `{"id":"...","name":"..."}` |
+| `add_pipeline_step` | `{"pipeline_id":"...","agent_id":"...","mode":"sequential\|parallel"}` | — |
+| `run_pipeline` | `{"pipeline_id":"...","input":"..."}` | `{"job_id":"..."}` |
 
 ### Jobs
 
-| Command | Params | Response |
-|---------|--------|----------|
-| `job_status` | `<job_id>` | `{"status":"...","created_at":"...",...}` |
-| `job_result` | `<job_id>` | `{"status":"...","result":"...","error":"..."}` |
-| `ls_jobs` | `[workspace_id]` | `[{...},...]` |
-| `cancel_job` | `<job_id>` | `ok` |
+All async commands (`run_agent`, `chat`, `agent_chat`, `run_pipeline`) return a `job_id` immediately. Poll or wait for results:
+
+| Command | Params | Response data |
+|---------|--------|---------------|
+| `job_status` | `{"job_id":"..."}` | `{"status":"...","created_at":"...",...}` |
+| `job_result` | `{"job_id":"..."}` | `{"status":"...","result":"...","error":"..."}` |
+| `wait_job` | `{"job_id":"..."}` | `{"status":"...","result":"...","error":"..."}` |
+| `ls_jobs` | `{"workspace_id":"..."}` (optional) | `[{...},...]` |
+| `cancel_job` | `{"job_id":"..."}` | — |
+
+`wait_job` blocks until the job reaches a terminal state (completed or failed).
 
 ### Management
 
-| Command | Params | Response |
-|---------|--------|----------|
-| `health` | — | `ok` |
+| Command | Params | Response data |
+|---------|--------|---------------|
+| `health` | — | — |
 | `system_metrics` | — | JSON metrics snapshot |
 | `system_stats` | — | JSON combined stats |
 
 ### External Agent Registration
 
-A process can register itself as an agent over its own TCP connection:
+A process registers itself as an agent using its own TCP connection with the JSON protocol:
 
 ```
-→ register_agent <catalog_id> <name> <instructions...>\n
-← {"agent_id":"..."}\n
+→ {"cmd":"register_agent","params":{"catalog_id":"...","name":"...","instructions":"..."}}\n
+← {"ok":true,"data":{"agent_id":"..."}}\n
 ```
 
 After registration the connection stays open. The server sends run requests as JSON lines and the process replies with JSON lines:
@@ -224,12 +246,21 @@ catalogs, _ := c.ListCatalogs()
 catID := catalogs[0].ID
 info, _ := c.AddAgent(catID, "summarizer")
 c.SetAgentInstructions(info.ID, "You summarize text concisely.")
-reply, _ := c.RunAgent(info.ID, "Summarize: the quick brown fox...")
+
+// Async agent run — returns a job ID immediately.
+jobID, _ := c.RunAgent(info.ID, "Summarize: the quick brown fox...")
+result, _ := c.WaitJob(jobID)  // blocks until done
+fmt.Println(result.Result)
+
+// Agent thread — persistent conversation bound to a single agent.
+thread, _ := c.NewAgentThread(info.ID, "my-convo")
+jobID, _ = c.AgentChat(thread.ID, "Hello!")
+result, _ = c.WaitJob(jobID)
 
 // Pipeline.
-ws, _ := c.CreatePipeline(wsID, "research-pipeline")
-c.AddPipelineStep(ws.ID, agentID, "sequential")
-jobID, _ := c.RunPipeline(ws.ID, "input text")
+pipeline, _ := c.CreatePipeline(wsID, "research-pipeline")
+c.AddPipelineStep(pipeline.ID, agentID, "sequential")
+jobID, _ = c.RunPipeline(pipeline.ID, "input text")
 status, _ := c.JobStatus(jobID)
 
 // External agent registration.
