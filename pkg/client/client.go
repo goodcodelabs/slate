@@ -95,6 +95,21 @@ func (c *Client) send(cmd string, params interface{}) (json.RawMessage, error) {
 
 // ---- Workspace commands ----
 
+// ListWorkspaces returns all workspaces.
+func (c *Client) ListWorkspaces() ([]WorkspaceInfo, error) {
+	data, err := c.send("ls_workspaces", map[string]string{})
+	if err != nil {
+		return nil, err
+	}
+	var out struct {
+		Workspaces []WorkspaceInfo `json:"workspaces"`
+	}
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, fmt.Errorf("parsing response: %w", err)
+	}
+	return out.Workspaces, nil
+}
+
 // AddWorkspace creates a workspace with the given name.
 func (c *Client) AddWorkspace(name string) error {
 	_, err := c.send("add_workspace", map[string]string{"name": name})

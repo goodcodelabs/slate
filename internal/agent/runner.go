@@ -217,7 +217,13 @@ func (r *Runner) RunWithOptions(ctx context.Context, agentID ksuid.KSUID, input 
 			}
 			return nil, fmt.Errorf("external agent run: %w", err)
 		}
-		return &RunResult{Response: response}, nil
+		fullHistory := make([]llm.Message, len(history), len(history)+2)
+		copy(fullHistory, history)
+		fullHistory = append(fullHistory,
+			llm.Message{Role: llm.RoleUser, Content: []llm.Content{{Type: llm.ContentTypeText, Text: input}}},
+			llm.Message{Role: llm.RoleAssistant, Content: []llm.Content{{Type: llm.ContentTypeText, Text: response}}},
+		)
+		return &RunResult{Response: response, History: fullHistory}, nil
 	}
 
 	model := agent.Model

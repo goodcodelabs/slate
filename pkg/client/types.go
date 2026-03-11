@@ -1,5 +1,13 @@
 package client
 
+// WorkspaceInfo summarizes a workspace.
+type WorkspaceInfo struct {
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	CatalogID     string `json:"catalog_id,omitempty"`
+	RouterAgentID string `json:"router_agent_id,omitempty"`
+}
+
 // AgentInfo summarizes a registered agent.
 type AgentInfo struct {
 	ID   string `json:"id"`
