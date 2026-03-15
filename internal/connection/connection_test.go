@@ -40,7 +40,7 @@ func newTestHandler(t *testing.T, store *data.Data) (handler *connection.Handler
 	met := metrics.New()
 	extAgents := agent.NewExternalAgentRegistry()
 
-	h := connection.New(serverConn, sched, store, nil, met, extAgents, &connection.Options{
+	h := connection.New(serverConn, sched, store, nil, met, extAgents, nil, &connection.Options{
 		ClientIdleTimeout: 5000,
 	})
 	return h, clientConn

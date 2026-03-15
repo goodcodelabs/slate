@@ -17,6 +17,7 @@ import (
 	"slate/internal/scheduler"
 	"slate/internal/tools"
 	"slate/internal/tools/builtin"
+	"slate/internal/trace"
 )
 
 func main() {
@@ -57,6 +58,12 @@ func run(cfg *configuration.Configuration, logger *slog.Logger) {
 		return
 	}
 
+	tracer, err := trace.NewTracer(cfg.DataDir)
+	if err != nil {
+		logger.Error("Creating Tracer", "error", err)
+		return
+	}
+
 	registry := tools.NewRegistry()
 	registry.Register(builtin.NewHTTPFetchTool())
 	registry.Register(builtin.NewShellTool())
@@ -70,6 +77,7 @@ func run(cfg *configuration.Configuration, logger *slog.Logger) {
 		Metrics:        met,
 		Events:         evLogger,
 		ExternalAgents: extAgents,
+		Tracer:         tracer,
 	})
 	runner.RegisterCallAgentTool(registry)
 
@@ -96,7 +104,7 @@ func run(cfg *configuration.Configuration, logger *slog.Logger) {
 		select {
 		case sem <- struct{}{}:
 			go func(c net.Conn) {
-				conn := connection.New(c, sched, store, runner, met, extAgents, &connection.Options{
+				conn := connection.New(c, sched, store, runner, met, extAgents, tracer, &connection.Options{
 					ClientIdleTimeout: cfg.ClientIdleTimeout,
 				})
 

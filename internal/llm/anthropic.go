@@ -135,6 +135,11 @@ func convertResponse(msg *anthropic.Message) *CompletionResponse {
 				Name:  block.Name,
 				Input: block.Input,
 			})
+		case "thinking":
+			contents = append(contents, Content{
+				Type:     ContentTypeThinking,
+				Thinking: block.Thinking,
+			})
 		}
 	}
 	return &CompletionResponse{

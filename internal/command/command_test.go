@@ -10,7 +10,7 @@ import (
 )
 
 func commandsWithSched(store *data.Data, sched *scheduler.Scheduler) map[string]command.ProtocolCommand {
-	return command.InitCommands(store, nil, sched, nil)
+	return command.InitCommands(store, nil, sched, nil, nil)
 }
 
 func newTestStore(t *testing.T) *data.Data {
@@ -26,7 +26,7 @@ func newTestStore(t *testing.T) *data.Data {
 // commands builds a command map for testing — runner, sched, metrics can be nil
 // for commands that only use the store.
 func commands(store *data.Data) map[string]command.ProtocolCommand {
-	return command.InitCommands(store, nil, nil, nil)
+	return command.InitCommands(store, nil, nil, nil, nil)
 }
 
 // exec runs a named command with the given params (marshaled to JSON).

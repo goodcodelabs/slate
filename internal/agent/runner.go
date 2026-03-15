@@ -13,6 +13,7 @@ import (
 	"slate/internal/llm"
 	"slate/internal/metrics"
 	"slate/internal/tools"
+	"slate/internal/trace"
 )
 
 const (
@@ -26,6 +27,7 @@ type RunnerOptions struct {
 	Metrics        *metrics.Metrics
 	Events         *events.Logger
 	ExternalAgents *ExternalAgentRegistry
+	Tracer         *trace.Tracer
 }
 
 // Runner executes an agent against an LLM provider, managing the agentic loop.
@@ -37,6 +39,7 @@ type Runner struct {
 	metrics        *metrics.Metrics
 	events         *events.Logger
 	externalAgents *ExternalAgentRegistry
+	tracer         *trace.Tracer
 }
 
 // RunResult holds the output of a single agent run.
@@ -56,6 +59,7 @@ func NewRunner(provider llm.Provider, store *data.Data, registry *tools.Registry
 		metrics:        opts.Metrics,
 		events:         opts.Events,
 		externalAgents: opts.ExternalAgents,
+		tracer:         opts.Tracer,
 	}
 }
 
@@ -91,6 +95,7 @@ func (r *Runner) RunThread(ctx context.Context, threadID ksuid.KSUID, input stri
 
 	result, err := r.RunWithOptions(ctx, routerID, input, thread.Messages, RunOptions{
 		SystemPromptSuffix: suffix,
+		ThreadID:           threadID,
 	})
 	if err != nil {
 		r.emitEvent(events.Event{
@@ -143,7 +148,7 @@ func (r *Runner) RunAgentThread(ctx context.Context, threadID ksuid.KSUID, input
 
 	historyLen := len(thread.Messages)
 
-	result, err := r.Run(ctx, thread.AgentID, input, thread.Messages)
+	result, err := r.RunWithOptions(ctx, thread.AgentID, input, thread.Messages, RunOptions{ThreadID: threadID})
 	if err != nil {
 		r.emitEvent(events.Event{
 			Type:     events.EventAgentRunFailed,
@@ -178,6 +183,9 @@ type RunOptions struct {
 	// SystemPromptSuffix is appended to the agent's instructions (separated by a blank line).
 	SystemPromptSuffix string
 
+	// ThreadID, when set, causes trace events to be written for this turn.
+	ThreadID ksuid.KSUID
+
 	// OnToken is called with the full text content of each LLM response turn.
 	OnToken func(text string)
 
@@ -199,6 +207,18 @@ func (r *Runner) RunWithOptions(ctx context.Context, agentID ksuid.KSUID, input 
 	agent, _, err := r.store.FindAgent(agentID)
 	if err != nil {
 		return nil, fmt.Errorf("loading agent: %w", err)
+	}
+
+	emitTrace := func(e trace.TraceEvent) {
+		if r.tracer == nil || opts.ThreadID == (ksuid.KSUID{}) {
+			return
+		}
+		e.ThreadID = opts.ThreadID.String()
+		e.AgentID = agentID.String()
+		if e.Timestamp.IsZero() {
+			e.Timestamp = time.Now().UTC()
+		}
+		_ = r.tracer.Append(e)
 	}
 
 	// Dispatch to an external process if the agent is registered as external.
@@ -261,6 +281,8 @@ func (r *Runner) RunWithOptions(ctx context.Context, agentID ksuid.KSUID, input 
 		toolDefs = r.registry.GetDefs(agent.Tools)
 	}
 
+	emitTrace(trace.TraceEvent{Type: trace.EventTurnStart})
+
 	var totalInput, totalOutput int64
 	iteration := 0
 
@@ -306,17 +328,30 @@ func (r *Runner) RunWithOptions(ctx context.Context, agentID ksuid.KSUID, input 
 			)
 		}
 
+		emitTrace(trace.TraceEvent{
+			Type:         trace.EventLLMCall,
+			Model:        model,
+			Iteration:    iteration,
+			StopReason:   resp.StopReason,
+			InputTokens:  resp.InputTokens,
+			OutputTokens: resp.OutputTokens,
+			LatencyMs:    latencyMs,
+		})
+
 		totalInput += resp.InputTokens
 		totalOutput += resp.OutputTokens
 		messages = append(messages, resp.Message)
 		iteration++
 
-		// Fire OnToken with any text content in this response.
-		if opts.OnToken != nil {
-			for _, c := range resp.Message.Content {
-				if c.Type == llm.ContentTypeText && c.Text != "" {
+		// Fire OnToken with any text content in this response, and emit trace events.
+		for _, c := range resp.Message.Content {
+			if c.Type == llm.ContentTypeText && c.Text != "" {
+				if opts.OnToken != nil {
 					opts.OnToken(c.Text)
 				}
+				emitTrace(trace.TraceEvent{Type: trace.EventTextOutput, Text: c.Text})
+			} else if c.Type == llm.ContentTypeThinking && c.Thinking != "" {
+				emitTrace(trace.TraceEvent{Type: trace.EventThinking, Text: c.Thinking})
 			}
 		}
 
@@ -325,7 +360,7 @@ func (r *Runner) RunWithOptions(ctx context.Context, agentID ksuid.KSUID, input 
 		}
 
 		// Execute every tool call the model requested.
-		toolResults, err := r.executeToolCalls(ctx, agentID, resp.Message.Content, opts.OnToolCall, opts.OnToolResult)
+		toolResults, err := r.executeToolCalls(ctx, agentID, resp.Message.Content, opts.OnToolCall, opts.OnToolResult, emitTrace)
 		if err != nil {
 			return nil, err
 		}
@@ -339,6 +374,12 @@ func (r *Runner) RunWithOptions(ctx context.Context, agentID ksuid.KSUID, input 
 			Content: toolResults,
 		})
 	}
+
+	emitTrace(trace.TraceEvent{
+		Type:              trace.EventTurnEnd,
+		TotalInputTokens:  totalInput,
+		TotalOutputTokens: totalOutput,
+	})
 
 	// Extract text from the final assistant message.
 	var finalText string
@@ -366,6 +407,7 @@ func (r *Runner) executeToolCalls(
 	content []llm.Content,
 	onToolCall func(string, json.RawMessage),
 	onToolResult func(string, string, string),
+	emitTrace func(trace.TraceEvent),
 ) ([]llm.Content, error) {
 	if r.registry == nil {
 		return nil, nil
@@ -379,6 +421,12 @@ func (r *Runner) executeToolCalls(
 		if onToolCall != nil {
 			onToolCall(c.Name, c.Input)
 		}
+		emitTrace(trace.TraceEvent{
+			Type:      trace.EventToolCall,
+			ToolName:  c.Name,
+			ToolUseID: c.ID,
+			ToolInput: c.Input,
+		})
 
 		toolStart := time.Now()
 		output, execErr := r.registry.Execute(ctx, c.Name, c.Input)
@@ -421,6 +469,13 @@ func (r *Runner) executeToolCalls(
 		if onToolResult != nil {
 			onToolResult(c.ID, c.Name, result.Output)
 		}
+		emitTrace(trace.TraceEvent{
+			Type:       trace.EventToolResult,
+			ToolName:   c.Name,
+			ToolUseID:  c.ID,
+			ToolOutput: result.Output,
+			IsError:    result.IsError,
+		})
 
 		results = append(results, result)
 	}
