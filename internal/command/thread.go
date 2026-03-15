@@ -10,6 +10,7 @@ import (
 	"slate/internal/agent"
 	"slate/internal/data"
 	"slate/internal/scheduler"
+	"slate/internal/trace"
 )
 
 // NewThreadCommand handles: new_thread
@@ -163,5 +164,31 @@ func (c *ThreadHistoryCommand) Execute(_ Context, params json.RawMessage) (*Resp
 		return nil, err
 	}
 	out, _ := json.Marshal(map[string]interface{}{"messages": thread.Messages})
+	return &Response{Message: string(out)}, nil
+}
+
+// ThreadTraceCommand handles: thread_trace
+type ThreadTraceCommand struct {
+	tracer *trace.Tracer
+}
+
+func (c *ThreadTraceCommand) Execute(_ Context, params json.RawMessage) (*Response, error) {
+	var p struct {
+		ThreadID string `json:"thread_id"`
+		Limit    int    `json:"limit"`
+	}
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, fmt.Errorf("invalid params: %w", err)
+	}
+	if _, err := ksuid.Parse(p.ThreadID); err != nil {
+		return nil, fmt.Errorf("invalid thread_id: %w", err)
+	}
+
+	events, err := c.tracer.Read(p.ThreadID, p.Limit)
+	if err != nil {
+		return nil, err
+	}
+
+	out, _ := json.Marshal(map[string]interface{}{"events": events})
 	return &Response{Message: string(out)}, nil
 }

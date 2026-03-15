@@ -16,13 +16,14 @@ import (
 	"slate/internal/metrics"
 	"slate/internal/parser"
 	"slate/internal/scheduler"
+	"slate/internal/trace"
 	"strings"
 	"time"
 
 	"github.com/segmentio/ksuid"
 )
 
-func New(connection net.Conn, sched *scheduler.Scheduler, store *data.Data, runner *agent.Runner, met *metrics.Metrics, extAgents *agent.ExternalAgentRegistry, opts *Options) *Handler {
+func New(connection net.Conn, sched *scheduler.Scheduler, store *data.Data, runner *agent.Runner, met *metrics.Metrics, extAgents *agent.ExternalAgentRegistry, tracer *trace.Tracer, opts *Options) *Handler {
 	connId := ksuid.New()
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil)).With("conn_id", connId)
 	requestParser := parser.New()
@@ -43,7 +44,7 @@ func New(connection net.Conn, sched *scheduler.Scheduler, store *data.Data, runn
 
 		logger:        logger,
 		requestParser: requestParser,
-		commands:      command.InitCommands(store, runner, sched, met),
+		commands:      command.InitCommands(store, runner, sched, met, tracer),
 		sched:         sched,
 		opts:          getConfiguration(opts),
 	}

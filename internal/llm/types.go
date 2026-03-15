@@ -15,6 +15,7 @@ const (
 	ContentTypeText       ContentType = "text"
 	ContentTypeToolUse    ContentType = "tool_use"
 	ContentTypeToolResult ContentType = "tool_result"
+	ContentTypeThinking   ContentType = "thinking"
 )
 
 // Content represents a single block within a message.
@@ -23,6 +24,9 @@ type Content struct {
 
 	// text fields
 	Text string `json:"text,omitempty"`
+
+	// thinking fields
+	Thinking string `json:"thinking,omitempty"`
 
 	// tool_use fields (assistant → orchestrator)
 	ID    string          `json:"id,omitempty"`

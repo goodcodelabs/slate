@@ -7,6 +7,7 @@ import (
 	"slate/internal/data"
 	"slate/internal/metrics"
 	"slate/internal/scheduler"
+	"slate/internal/trace"
 
 	"github.com/segmentio/ksuid"
 )
@@ -49,6 +50,7 @@ const (
 	CmdSystemStats          = "system_stats"
 	CmdListJobs             = "ls_jobs"
 	CmdCancelJob            = "cancel_job"
+	CmdThreadTrace          = "thread_trace"
 )
 
 // Command is the internal interface all protocol commands implement.
@@ -74,7 +76,7 @@ func (p *ProtocolCommand) Execute(commandContext Context, params json.RawMessage
 	return p.cmd.Execute(commandContext, params)
 }
 
-func InitCommands(store *data.Data, runner *agent.Runner, sched *scheduler.Scheduler, met *metrics.Metrics) map[string]ProtocolCommand {
+func InitCommands(store *data.Data, runner *agent.Runner, sched *scheduler.Scheduler, met *metrics.Metrics, tracer *trace.Tracer) map[string]ProtocolCommand {
 	return map[string]ProtocolCommand{
 		CmdListWorkspaces:       {cmd: &ListWorkspacesCommand{store: store}},
 		CmdAddWorkspace:         {cmd: &AddWorkspaceCommand{store: store}},
@@ -112,5 +114,6 @@ func InitCommands(store *data.Data, runner *agent.Runner, sched *scheduler.Sched
 		CmdSystemStats:          {cmd: &SystemStatsCommand{store: store, sched: sched, metrics: met}},
 		CmdListJobs:             {cmd: &ListJobsCommand{store: store}},
 		CmdCancelJob:            {cmd: &CancelJobCommand{store: store}},
+		CmdThreadTrace:          {cmd: &ThreadTraceCommand{tracer: tracer}},
 	}
 }
